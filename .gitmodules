@@ -1,0 +1,3 @@
+[submodule "Ouroboros_origin"]
+	path = Ouroboros_origin
+	url = https://github.com/GPUPeople/Ouroboros.git
