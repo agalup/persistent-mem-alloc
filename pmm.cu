@@ -301,9 +301,12 @@ void malloc_app_test(volatile int* exit_signal,
                 lock, size_to_alloc);
     }
     if (thid == 0)
-    printf("done\n");
+        printf("inner iteration done\n");
     
     atomicAdd((int*)&exit_counter[0], 1);
+
+    if (thid == 0)
+        printf("exit counter %d\n", exit_counter[0]);
 }
 
 //consumer2
@@ -338,10 +341,13 @@ void check_persistent_kernel_results(int* exit_signal,
 
     // Check results
     int old_counter = -1;
-    long long iter = 0;
-    long long time_limit = 10000000000;
+    long long int iter = 0;
+    long long int time_limit = 1000000000;
     //printf("start\n");
+    printf("waiting till allocations are done\n");
     while (iter < time_limit){
+        if (iter%10000000 == 0)
+            printf("iter %lld, exit counter %d\n", iter, exit_counter[0]);
         // Check if all allocations are done
         if (exit_counter[0] == block_size*app_grid_size){
             GUARD_CU(cudaStreamSynchronize(0));
@@ -484,30 +490,30 @@ void start_application(int type,
                        int iter_num,
                        bool& kernel_complete){
     // Run application
-    timing_launch.startMeasurement();
+    //timing_launch.startMeasurement();
     timing_sync.startMeasurement();
     GUARD_CU(cudaPeekAtLastError());
     auto kernel = malloc_app_test;
     if (type == FREE){
         kernel = free_app_test;
     }
-    debug("start kernel\n");
+    printf("start kernel\n");
     kernel<<<grid_size, block_size>>>(exit_signal, requests.d_memory, 
             requests.request_signal, requests.request_mem_size, 
             requests.request_id, requests.request_dest, exit_counter, requests.lock, 
             size_to_alloc, iter_num);
-    timing_launch.stopMeasurement();
+    printf("kernel done, exit counter %d\n", exit_counter[0]);
     GUARD_CU(cudaPeekAtLastError());
-    debug("done\n");
-    fflush(stdout);
+    //timing_launch.stopMeasurement();
 
     // Check resutls: test
-    debug("check results\n");
+    printf("check results\n");
+    fflush(stdout);
     check_persistent_kernel_results(exit_signal, exit_counter, block_size, 
             grid_size, requests, requests.size, kernel_complete);
     timing_sync.stopMeasurement();
     GUARD_CU(cudaPeekAtLastError());
-    debug("results done\n");
+    printf("results done\n");
     fflush(stdout);
 
     if (kernel_complete){
