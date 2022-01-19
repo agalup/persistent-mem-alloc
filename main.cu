@@ -35,7 +35,7 @@ instant size %ld\n",
     int SMs = deviceProp.multiProcessorCount;
     printf("max block number %d\n", SMs);
     printf("instant size %ld\n", instant_size);
-    int size = 3*SMs;
+    int size = 700;
 
     int* sm_app             = (int*)malloc(sizeof(int)*size);
     int* sm_mm              = (int*)malloc(sizeof(int)*size);
