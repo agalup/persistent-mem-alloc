@@ -3,6 +3,7 @@
 #include <cassert>
 #include <algorithm>
 #include <thread>
+#include <chrono>
 #include <any>
 
 #include "device/Ouroboros_impl.cuh"
@@ -12,6 +13,7 @@
 #include "Utility.h"
 #include "cuda.h"
 #include "pmm-utils.cuh"
+
 //#include "src/gpu_hash_table.cuh"
 
 using namespace std;
@@ -27,6 +29,7 @@ __global__
     if (thid >= requests_num[0]){
         return;
     }
+    __threadfence();
     if (d_memory[thid]){
         printf("sync error: %d was not released before\n", thid);
         mm->free((void*)d_memory[thid]);
@@ -50,7 +53,6 @@ void _request_processing(
     acquire_semaphore((int*)lock, request_id);
     debug("mm: request recieved %d\n", request_id); 
     auto addr_id = request_ids[request_id];
-    __threadfence();
     
     switch (request_signal[request_id]){
 
@@ -61,6 +63,7 @@ void _request_processing(
             }else{
                 assert(d_memory[addr_id] == NULL);
             }
+            __threadfence();
             d_memory[addr_id] = reinterpret_cast<volatile int*>
                 (mm->malloc(4+request_mem_size[request_id]));
             __threadfence();
@@ -91,7 +94,9 @@ void _request_processing(
         case GC:
             assert(d_memory[addr_id]);
             assert(d_memory[addr_id][0] == -1);
+            __threadfence();
             mm->free((void*)d_memory[addr_id]);
+            __threadfence();
             d_memory[addr_id] = NULL;
             atomicExch((int*)&request_signal[request_id], request_done);
             break;
@@ -100,8 +105,6 @@ void _request_processing(
             printf("request processing fail\n");
 
     }
-    __threadfence();
-
     release_semaphore((int*)lock, request_id);
     // SEMAPHORE
 }
@@ -118,16 +121,19 @@ void garbage_collector(volatile int** d_memory,
                        MemoryManagerType* mm){
     int thid = blockIdx.x * blockDim.x + threadIdx.x;
     
-    __threadfence();
     while (! exit_signal[0]){
         for (int request_id=thid; !exit_signal[0] && request_id<requests_number[0]; 
                 request_id += blockDim.x*gridDim.x){
+
+            __threadfence();
             if (request_signal[request_id] == GC){
                 _request_processing(request_id, exit_signal, request_signal,
                                     request_counter, request_ids, NULL, mm, 
                                     d_memory, request_mem_size, lock);
+                __threadfence();
             }
         }
+        __threadfence();
     }
 }
 
@@ -146,20 +152,22 @@ void mem_manager(volatile int* exit_signal,
         volatile int* lock){
     int thid = blockIdx.x * blockDim.x + threadIdx.x;
     
-    __threadfence();
     while (! exit_signal[0]){
         for (int request_id=thid; !exit_signal[0] && request_id<requests_number[0]; 
                 request_id += blockDim.x*gridDim.x){
 
+            __threadfence();
             if (request_signal[request_id] == MALLOC or 
                 request_signal[request_id] == FREE){
                 _request_processing(request_id, exit_signal, request_signal, 
                                     request_counter, request_ids, request_dest,
                                     mm, d_memory, request_mem_size, lock);
+                __threadfence();
             
             debug("mm: request done %d\n", request_id);
             }
         }
+        __threadfence();
     }
 }
 
@@ -176,16 +184,16 @@ void post_request(request_type type,
 
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
     
+    __threadfence();
     // SEMAPHORE
     acquire_semaphore((int*)lock, thid);
     if (type == MALLOC){
         request_mem_size[thid] = size_to_alloc;
     }
-    __threadfence();
     // SIGNAL update
     atomicExch((int*)&request_signal[thid], type);
-    __threadfence();
     release_semaphore((int*)lock, thid);
+    __threadfence();
     // SEMAPHORE
 }
 
@@ -201,12 +209,12 @@ void request_processed(request_type type,
                       int& req_id){
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
     // SEMAPHORE
+    __threadfence();
     acquire_semaphore((int*)lock, thid);
     switch (type){
         case MALLOC:
             req_id = request_id[thid];
             if (req_id >= 0 && !exit_signal[0]) {
-                __threadfence();
                 *dest = request_dest[thid];
                 assert(d_memory[req_id] != NULL);
                 if (d_memory[req_id][0] != 0)
@@ -227,8 +235,8 @@ void request_processed(request_type type,
             break;
     }
     request_signal[thid] = request_empty;
-    __threadfence();
     release_semaphore((int*)lock, thid);
+    __threadfence();
     // SEMAPHORE
 }
 
@@ -248,20 +256,39 @@ void request(request_type type,
     int req_id = -1;
     // wait for success
     while (!exit_signal[0]){
-        __threadfence();
         if (request_signal[thid] == request_empty){
-            post_request(type, dest, lock, request_mem_size, request_id, request_signal, request_dest, exit_signal, size_to_alloc);
+            post_request(type, dest, lock, request_mem_size, request_id, 
+                        request_signal, request_dest, exit_signal, size_to_alloc);
             break;
         }
+        __threadfence();
     }
 
+    __threadfence();
+
+    int it = 0;
     // wait for success
     while (!exit_signal[0]){
-        __threadfence();
+        char* type_ = new char[10];
+        char* state = new char[10];
+        if (++it > 1000){
+            if (type == MALLOC) type_ = "MALLOC"; else type_ = "FREE";
+            switch (request_signal[thid]){
+                case request_empty:  state = "EMPTY";  break;
+                case request_done:   state = "DONE";   break;
+                case request_malloc: state = "MALLOC"; break;
+                case request_free:   state = "FREE";   break;
+                case request_gc:     state = "GC";     break;
+            }
+            printf("thid %d, current state %s\n", thid, state);
+        }
+
         if (request_signal[thid] == request_done){
-            request_processed(type, lock, request_id, exit_signal, d_memory, dest, request_signal, request_dest, req_id);
+            request_processed(type, lock, request_id, exit_signal, d_memory, 
+                        dest, request_signal, request_dest, req_id);
             break;
         }
+        __threadfence();
     }
 }
 
@@ -280,10 +307,11 @@ void malloc_app_test(volatile int* exit_signal,
 
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
 
-    if (thid == 0)
-        printf("start inner iteration\n");
+    //if (thid == 0)
+    //    printf("start inner iteration\n");
     for (int i=0; i<iter_num; ++i){
         //if (thid == 0) printf("inner iteration %d\n", i);
+        __threadfence();
 
         volatile int* new_ptr = NULL;
         request((request_type)MALLOC, exit_signal, d_memory, &new_ptr, 
@@ -291,22 +319,29 @@ void malloc_app_test(volatile int* exit_signal,
                 lock, size_to_alloc);
         new_ptr[0] = thid;
 
+        __threadfence();
+
         assert(d_memory[request_id[thid]]);
         int value = d_memory[request_id[thid]][0];
         if (value != 0) printf("val = %d\n", value);
         assert(new_ptr[0] == thid);
+        
+        __threadfence();
 
         request((request_type)FREE, exit_signal, d_memory, &new_ptr,
                 request_signal, request_mem_size, request_id, request_dest,
                 lock, size_to_alloc);
+        
+        __threadfence_system();
     }
-    if (thid == 0)
-        printf("inner iteration done\n");
+    //if (thid == 0)
+    //    printf("inner iteration done\n");
     
     atomicAdd((int*)&exit_counter[0], 1);
 
-    if (thid == 0)
-        printf("exit counter %d\n", exit_counter[0]);
+    __threadfence();
+
+    //printf("exit counter[%d] = %d\n", thid, exit_counter[0]);
 }
 
 //consumer2
@@ -343,11 +378,11 @@ void check_persistent_kernel_results(int* exit_signal,
     int old_counter = -1;
     long long int iter = 0;
     long long int time_limit = 1000000000;
-    //printf("start\n");
-    printf("waiting till allocations are done\n");
+    //printf("waiting till allocations are done\n");
     while (iter < time_limit){
-        if (iter%10000000 == 0)
-            printf("iter %lld, exit counter %d\n", iter, exit_counter[0]);
+        //std::this_thread::sleep_for(std::chrono::seconds(1));
+        //if (iter%60 == 0)
+        //    printf("%lld min, exit counter %d\n", iter/60, exit_counter[0]);
         // Check if all allocations are done
         if (exit_counter[0] == block_size*app_grid_size){
             GUARD_CU(cudaStreamSynchronize(0));
@@ -372,8 +407,6 @@ void check_persistent_kernel_results(int* exit_signal,
             GUARD_CU(cudaPeekAtLastError());
         }
     }
-    debug("all requests are posted\n");
-
     GUARD_CU(cudaPeekAtLastError());
 }
 
@@ -497,24 +530,24 @@ void start_application(int type,
     if (type == FREE){
         kernel = free_app_test;
     }
-    printf("start kernel\n");
+    //printf("start kernel\n");
     kernel<<<grid_size, block_size>>>(exit_signal, requests.d_memory, 
             requests.request_signal, requests.request_mem_size, 
             requests.request_id, requests.request_dest, exit_counter, requests.lock, 
             size_to_alloc, iter_num);
-    printf("kernel done, exit counter %d\n", exit_counter[0]);
+    //printf("kernel done, exit counter %d\n", exit_counter[0]);
     GUARD_CU(cudaPeekAtLastError());
     //timing_launch.stopMeasurement();
 
     // Check resutls: test
-    printf("check results\n");
-    fflush(stdout);
+    //printf("check results\n");
+    //fflush(stdout);
     check_persistent_kernel_results(exit_signal, exit_counter, block_size, 
             grid_size, requests, requests.size, kernel_complete);
     timing_sync.stopMeasurement();
     GUARD_CU(cudaPeekAtLastError());
-    printf("results done\n");
-    fflush(stdout);
+    //printf("results done\n");
+    //fflush(stdout);
 
     if (kernel_complete){
         if (type == MALLOC){
@@ -567,7 +600,7 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
     auto instant_size = *ins_size;
 
     CUcontext default_ctx;
-    cuCtxGetCurrent(&default_ctx);
+    GUARD_CU((cudaError_t)cuCtxGetCurrent(&default_ctx));
 
 #ifdef OUROBOROS__
     //Ouroboros initialization
@@ -650,12 +683,13 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
             requests.init(requests_num);
             requests.memset();
 
+            //GUARD_CU((cudaError_t)cuCtxGetCurrent(&default_ctx));
             printf("start threads\n");
 
             // Run Memory Manager (Presistent kernel)
             std::thread mm_thread{[&] {
                 GUARD_CU((cudaError_t)cuCtxSetCurrent(mm_ctx));
-                GUARD_CU((cudaError_t)cuCtxSynchronize());
+                //GUARD_CU((cudaError_t)cuCtxSynchronize());
                 printf("start mm\n");
                 start_memory_manager(timing_mm, mm_grid_size, block_size, mm_ctx,
                                  exit_signal, requests, memory_manager);
@@ -665,11 +699,12 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
                 printf("done\n");
             }};
 
-            
+            //std::this_thread::sleep_for(std::chrono::seconds(1));
+
             // Run Garbage Collector (persistent kernel)
             std::thread gc_thread{[&] {
                 GUARD_CU((cudaError_t)cuCtxSetCurrent(gc_ctx));
-                GUARD_CU((cudaError_t)cuCtxSynchronize());
+                //GUARD_CU((cudaError_t)cuCtxSynchronize());
                 printf("start gc\n");
                 start_garbage_collector(timing_gc, gc_grid_size, block_size, gc_ctx,
                                  exit_signal, requests, memory_manager);
@@ -678,12 +713,14 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
                 GUARD_CU(cudaPeekAtLastError());
                 printf("done\n");
             }}; 
+        
+            std::this_thread::sleep_for(std::chrono::seconds(1));
 
             // Run APP (all threads do malloc)
             bool kernel_complete = false;
             std::thread app_thread{[&] {
                 GUARD_CU((cudaError_t)cuCtxSetCurrent(app_ctx));
-                GUARD_CU((cudaError_t)cuCtxSynchronize());
+                //GUARD_CU((cudaError_t)cuCtxSynchronize());
                 printf("start app\n");
                 start_application(MALLOC, timing_malloc_app, malloc_total_sync, 
                               app_grid_size, block_size, app_ctx, exit_signal,
@@ -694,6 +731,8 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
                 GUARD_CU(cudaPeekAtLastError());
                 printf("done\n");
             }};
+
+            //std::this_thread::sleep_for(std::chrono::seconds(1));
 
             printf("join app\n");
             app_thread.join();
@@ -707,19 +746,20 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
 
             *exit_signal = 1;
 
+            printf("join mm\n");
+            mm_thread.join();
+            printf("mm joined\n");
+      
             printf("join gc\n");
             gc_thread.join();
             printf("gc joined\n");
            
-            printf("join mm\n");
-            mm_thread.join();
-            printf("mm joined\n");
-           
             // Deallocate device memory
             //cuCtxSetCurrent(default_ctx);
+            //GUARD_CU((cudaError_t)cuCtxSetCurrent(default_ctx));
             clean_memory(app_grid_size, block_size, requests, memory_manager, exit_signal);
 
-            GUARD_CU((cudaError_t)cuCtxSynchronize());
+            //GUARD_CU((cudaError_t)cuCtxSynchronize());
             GUARD_CU(cudaDeviceSynchronize());
             GUARD_CU(cudaPeekAtLastError());
         }
