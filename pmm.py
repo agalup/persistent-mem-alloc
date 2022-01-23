@@ -192,19 +192,17 @@ def main(argv):
     iteration_num = 1
     kernel_iter_num = 1
 
-    #if len(argv) > 0:
-    #    alloc_per_thread = argv[0]
-
     if len(argv) > 0:
-        iteration_num = argv[0]
+        alloc_per_thread = argv[0]
 
     if len(argv) > 1:
-        kernel_iter_num = argv[1]
+        iteration_num = argv[1]
 
     if len(argv) > 2:
-        instant_size = argv[2]
+        kernel_iter_num = argv[2]
 
-    #print("alloc_per_thread {} iteration_num {} instant_size {}".format(alloc_per_thread, iteration_num, instant_size))
+    print("alloc_per_thread {} iteration_num {} iteration_per_kernel {} instant_size {}".format(alloc_per_thread,
+    iteration_num, kernel_iter_num, instant_size))
     
     print("ouroboros test")
     pmm_init = ouroboros.pmm_init
