@@ -266,10 +266,10 @@ void request(request_type type,
 
     __threadfence();
 
-    int it = 0;
+    //int it = 0;
     // wait for success
     while (!exit_signal[0]){
-        char* type_ = new char[10];
+        /*char* type_ = new char[10];
         char* state = new char[10];
         if (++it > 1000){
             if (type == MALLOC) type_ = "MALLOC"; else type_ = "FREE";
@@ -281,7 +281,7 @@ void request(request_type type,
                 case request_gc:     state = "GC";     break;
             }
             printf("thid %d, current state %s\n", thid, state);
-        }
+        }*/
 
         if (request_signal[thid] == request_done){
             request_processed(type, lock, request_id, exit_signal, d_memory, 
@@ -380,7 +380,7 @@ void check_persistent_kernel_results(int* exit_signal,
     long long int time_limit = 1000000000;
     //printf("waiting till allocations are done\n");
     while (iter < time_limit){
-        //std::this_thread::sleep_for(std::chrono::seconds(1));
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
         //if (iter%60 == 0)
         //    printf("%lld min, exit counter %d\n", iter/60, exit_counter[0]);
         // Check if all allocations are done
@@ -627,7 +627,7 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
     allocManaged(&exit_counter, sizeof(uint32_t));
 
     int block_size = 1024;
-    printf("size to alloc per thread %d, num iterations %d, kernel iterations %d, instantsize %ld\n", 
+    debug("size to alloc per thread %d, num iterations %d, kernel iterations %d, instantsize %ld\n", 
                 size_to_alloc, num_iterations, kernel_iteration_num, instant_size);
     std::cout << "#requests\t" << "#sm app\t\t" << "#sm mm\t\t" << "#sm gc\t\t" << "#malloc and free per sec\n";
 
@@ -644,8 +644,8 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
 
         int requests_num{app_grid_size*block_size};
 
-        printf("SMs: app %d, mm %d, gc %d, total %d\n", app_grid_size, mm_grid_size, gc_grid_size, SMs);
-        printf("requests_num %d\n", requests_num);
+        debug("SMs: app %d, mm %d, gc %d, total %d\n", app_grid_size, mm_grid_size, gc_grid_size, SMs);
+        debug("requests_num %d\n", requests_num);
 
         //output
         sm_app[it] = app_grid_size;
@@ -675,7 +675,7 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
         PerfMeasure timing_malloc_app, timing_mm, timing_gc, malloc_total_sync;
 
         for (int iteration = 0; iteration < num_iterations; ++iteration){
-            printf("iteartion %d\n", iteration);
+            debug("iteartion %d\n", iteration);
 
             *exit_signal = 0;
             *exit_counter = 0;
@@ -684,19 +684,19 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
             requests.memset();
 
             //GUARD_CU((cudaError_t)cuCtxGetCurrent(&default_ctx));
-            printf("start threads\n");
+            debug("start threads\n");
 
             // Run Memory Manager (Presistent kernel)
             std::thread mm_thread{[&] {
                 GUARD_CU((cudaError_t)cuCtxSetCurrent(mm_ctx));
                 //GUARD_CU((cudaError_t)cuCtxSynchronize());
-                printf("start mm\n");
+                debug("start mm\n");
                 start_memory_manager(timing_mm, mm_grid_size, block_size, mm_ctx,
                                  exit_signal, requests, memory_manager);
-                printf("mm done, sync\n");
+                debug("mm done, sync\n");
                 GUARD_CU((cudaError_t)cuCtxSynchronize());
                 GUARD_CU(cudaPeekAtLastError());
-                printf("done\n");
+                debug("done\n");
             }};
 
             //std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -705,13 +705,13 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
             std::thread gc_thread{[&] {
                 GUARD_CU((cudaError_t)cuCtxSetCurrent(gc_ctx));
                 //GUARD_CU((cudaError_t)cuCtxSynchronize());
-                printf("start gc\n");
+                debug("start gc\n");
                 start_garbage_collector(timing_gc, gc_grid_size, block_size, gc_ctx,
                                  exit_signal, requests, memory_manager);
-                printf("gc done, sync\n");
+                debug("gc done, sync\n");
                 GUARD_CU((cudaError_t)cuCtxSynchronize());
                 GUARD_CU(cudaPeekAtLastError());
-                printf("done\n");
+                debug("done\n");
             }}; 
         
             std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -721,38 +721,38 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
             std::thread app_thread{[&] {
                 GUARD_CU((cudaError_t)cuCtxSetCurrent(app_ctx));
                 //GUARD_CU((cudaError_t)cuCtxSynchronize());
-                printf("start app\n");
+                debug("start app\n");
                 start_application(MALLOC, timing_malloc_app, malloc_total_sync, 
                               app_grid_size, block_size, app_ctx, exit_signal,
                               requests, exit_counter, size_to_alloc, 
                               kernel_iteration_num, kernel_complete);
-                printf("app done, sync\n");
+                debug("app done, sync\n");
                 GUARD_CU((cudaError_t)cuCtxSynchronize());
                 GUARD_CU(cudaPeekAtLastError());
-                printf("done\n");
+                debug("done\n");
             }};
 
             //std::this_thread::sleep_for(std::chrono::seconds(1));
 
-            printf("join app\n");
+            debug("join app\n");
             app_thread.join();
-            printf("app joined\n");
+            debug("app joined\n");
 
             if (not kernel_complete){
-                printf("kernel is not completed, free memory which app allocated\n");
+                debug("kernel is not completed, free memory which app allocated\n");
                 clean_memory(app_grid_size, block_size, requests, memory_manager, exit_signal);
                 continue;
             }
 
             *exit_signal = 1;
 
-            printf("join mm\n");
+            debug("join mm\n");
             mm_thread.join();
-            printf("mm joined\n");
+            debug("mm joined\n");
       
-            printf("join gc\n");
+            debug("join gc\n");
             gc_thread.join();
-            printf("gc joined\n");
+            debug("gc joined\n");
            
             // Deallocate device memory
             //cuCtxSetCurrent(default_ctx);
@@ -763,7 +763,7 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
             GUARD_CU(cudaDeviceSynchronize());
             GUARD_CU(cudaPeekAtLastError());
         }
-        printf("done\n");
+        debug("done\n");
 
         GUARD_CU((cudaError_t)cuCtxDestroy(app_ctx));
         GUARD_CU((cudaError_t)cuCtxDestroy(gc_ctx));
