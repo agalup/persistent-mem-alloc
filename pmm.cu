@@ -14,6 +14,8 @@
 #include "cuda.h"
 #include "pmm-utils.cuh"
 
+#define MONO 0
+
 //#include "src/gpu_hash_table.cuh"
 
 using namespace std;
@@ -303,7 +305,8 @@ void malloc_app_test(volatile int* exit_signal,
         volatile int* exit_counter, 
         volatile int* lock,
         int size_to_alloc,
-        int iter_num){
+        int iter_num,
+        MemoryManagerType* mm){
 
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
 
@@ -314,9 +317,17 @@ void malloc_app_test(volatile int* exit_signal,
         __threadfence();
 
         volatile int* new_ptr = NULL;
-        request((request_type)MALLOC, exit_signal, d_memory, &new_ptr, 
-                request_signal, request_mem_size, request_id, request_dest,
-                lock, size_to_alloc);
+       
+        if (MONO){
+            request_id[thid] = thid;
+            d_memory[request_id[thid]] = reinterpret_cast<volatile int*>(mm->malloc(4+request_mem_size[thid])); 
+            d_memory[request_id[thid]][0] = 0;
+            new_ptr = &d_memory[request_id[thid]][1];
+        }else{
+            request((request_type)MALLOC, exit_signal, d_memory, &new_ptr, 
+                    request_signal, request_mem_size, request_id, request_dest,
+                    lock, size_to_alloc);
+        }
         new_ptr[0] = thid;
 
         __threadfence();
@@ -325,13 +336,18 @@ void malloc_app_test(volatile int* exit_signal,
         int value = d_memory[request_id[thid]][0];
         if (value != 0) printf("val = %d\n", value);
         assert(new_ptr[0] == thid);
-        
+
         __threadfence();
 
-        request((request_type)FREE, exit_signal, d_memory, &new_ptr,
-                request_signal, request_mem_size, request_id, request_dest,
-                lock, size_to_alloc);
-        
+        if (MONO){
+            mm->free((void*)new_ptr);
+        }else{
+            request((request_type)FREE, exit_signal, d_memory, &new_ptr,
+                    request_signal, request_mem_size, request_id, request_dest,
+                    lock, size_to_alloc);
+
+        }
+
         __threadfence_system();
     }
     //if (thid == 0)
@@ -432,9 +448,10 @@ void start_memory_manager(PerfMeasure& timing_mm,
                           uint32_t block_size, 
                           CUcontext& mm_ctx,
                           int* exit_signal,
+                          int* mm_started,
                           RequestType& requests,
                           MemoryManagerType& memory_manager){
-
+    *mm_started = 1;
     timing_mm.startMeasurement();
     mem_manager<<<mm_grid_size, block_size>>>(exit_signal, 
             requests.requests_number, requests.request_counter, requests.request_signal, 
@@ -457,8 +474,10 @@ void start_garbage_collector(PerfMeasure& timing_gc,
                           uint32_t block_size, 
                           CUcontext& gc_ctx,
                           int* exit_signal,
+                          int* gc_started,
                           RequestType& requests,
                           MemoryManagerType& memory_manager){
+    *gc_started = 1;
     timing_gc.startMeasurement();
     garbage_collector<<<gc_grid_size, block_size>>>(
             requests.d_memory, 
@@ -521,33 +540,34 @@ void start_application(int type,
                        int* exit_counter,
                        int size_to_alloc, 
                        int iter_num,
-                       bool& kernel_complete){
+                       bool& kernel_complete,
+                       MemoryManagerType& memory_manager){
     // Run application
-    //timing_launch.startMeasurement();
-    timing_sync.startMeasurement();
-    GUARD_CU(cudaPeekAtLastError());
+    //timing_sync.startMeasurement();
+    //GUARD_CU(cudaPeekAtLastError());
     auto kernel = malloc_app_test;
-    if (type == FREE){
+    /*if (type == FREE){
         kernel = free_app_test;
-    }
+    }*/
     //printf("start kernel\n");
     kernel<<<grid_size, block_size>>>(exit_signal, requests.d_memory, 
             requests.request_signal, requests.request_mem_size, 
             requests.request_id, requests.request_dest, exit_counter, requests.lock, 
-            size_to_alloc, iter_num);
+            size_to_alloc, iter_num, memory_manager.getDeviceMemoryManager());
     //printf("kernel done, exit counter %d\n", exit_counter[0]);
     GUARD_CU(cudaPeekAtLastError());
-    //timing_launch.stopMeasurement();
 
     // Check resutls: test
     //printf("check results\n");
     //fflush(stdout);
-    check_persistent_kernel_results(exit_signal, exit_counter, block_size, 
-            grid_size, requests, requests.size, kernel_complete);
-    timing_sync.stopMeasurement();
-    GUARD_CU(cudaPeekAtLastError());
+    // TODO: move to debug
+    //check_persistent_kernel_results(exit_signal, exit_counter, block_size, 
+    //        grid_size, requests, requests.size, kernel_complete);
+    //timing_sync.stopMeasurement();
+    //GUARD_CU(cudaPeekAtLastError());
     //printf("results done\n");
     //fflush(stdout);
+    kernel_complete = true;
 
     if (kernel_complete){
         if (type == MALLOC){
@@ -626,6 +646,12 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
     int* exit_counter;
     allocManaged(&exit_counter, sizeof(uint32_t));
 
+    int* gc_started;
+    allocManaged(&gc_started, sizeof(uint32_t));
+    
+    int* mm_started;
+    allocManaged(&mm_started, sizeof(uint32_t));
+
     int block_size = 1024;
     debug("size to alloc per thread %d, num iterations %d, kernel iterations %d, instantsize %ld\n", 
                 size_to_alloc, num_iterations, kernel_iteration_num, instant_size);
@@ -679,6 +705,8 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
 
             *exit_signal = 0;
             *exit_counter = 0;
+            *mm_started = 0;
+            *gc_started = 0;
             RequestType requests;
             requests.init(requests_num);
             requests.memset();
@@ -692,7 +720,7 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
                 //GUARD_CU((cudaError_t)cuCtxSynchronize());
                 debug("start mm\n");
                 start_memory_manager(timing_mm, mm_grid_size, block_size, mm_ctx,
-                                 exit_signal, requests, memory_manager);
+                                 exit_signal, mm_started, requests, memory_manager);
                 debug("mm done, sync\n");
                 GUARD_CU((cudaError_t)cuCtxSynchronize());
                 GUARD_CU(cudaPeekAtLastError());
@@ -707,14 +735,16 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
                 //GUARD_CU((cudaError_t)cuCtxSynchronize());
                 debug("start gc\n");
                 start_garbage_collector(timing_gc, gc_grid_size, block_size, gc_ctx,
-                                 exit_signal, requests, memory_manager);
+                                 exit_signal, gc_started, requests, memory_manager);
                 debug("gc done, sync\n");
                 GUARD_CU((cudaError_t)cuCtxSynchronize());
                 GUARD_CU(cudaPeekAtLastError());
                 debug("done\n");
             }}; 
         
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+            //std::this_thread::sleep_for(std::chrono::seconds(1));
+
+            while ((! *gc_started) || (! *mm_started));
 
             // Run APP (all threads do malloc)
             bool kernel_complete = false;
@@ -722,10 +752,12 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
                 GUARD_CU((cudaError_t)cuCtxSetCurrent(app_ctx));
                 //GUARD_CU((cudaError_t)cuCtxSynchronize());
                 debug("start app\n");
+                malloc_total_sync.startMeasurement();
                 start_application(MALLOC, timing_malloc_app, malloc_total_sync, 
                               app_grid_size, block_size, app_ctx, exit_signal,
                               requests, exit_counter, size_to_alloc, 
-                              kernel_iteration_num, kernel_complete);
+                              kernel_iteration_num, kernel_complete, memory_manager);
+                malloc_total_sync.stopMeasurement();
                 debug("app done, sync\n");
                 GUARD_CU((cudaError_t)cuCtxSynchronize());
                 GUARD_CU(cudaPeekAtLastError());
@@ -739,7 +771,7 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
             debug("app joined\n");
 
             if (not kernel_complete){
-                debug("kernel is not completed, free memory which app allocated\n");
+                printf("kernel is not completed, free memory which app allocated\n");
                 clean_memory(app_grid_size, block_size, requests, memory_manager, exit_signal);
                 continue;
             }

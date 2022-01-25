@@ -94,19 +94,19 @@ def draw_graph(plt, testcase, alloc_per_thread, kernel_iter_num, iteration_num,
 
     from numpy import arange
 
-    pltname = str(testcase) + "_" + str(SMs) + "SMs_" + \
+    pltname = "mono" + str(testcase) + "_" + str(SMs) + "SMs_" + \
     str(kernel_iter_num) + "_" + str(iteration_num) + "_" + \
     str(size) + "_movie_"
 
     ii = -135
     jj = -35.265
     ax.view_init(azim=ii, elev=jj)
-    plt.savefig(pltname + str(ii) + "_" + str(jj) + ".pdf")
+    plt.savefig(pltname + ".pdf")
 
-    ii = -135
-    jj = 15
-    ax.view_init(azim=ii, elev=jj)
-    plt.savefig(pltname + str(ii) + "_" + str(jj) + ".pdf")
+    #ii = -135
+    #jj = 15
+    #ax.view_init(azim=ii, elev=jj)
+    #plt.savefig(pltname + str(ii) + "_" + str(jj) + ".pdf")
 
        
 def run_test(testcase, alloc_per_thread, device, pmm_init, 
