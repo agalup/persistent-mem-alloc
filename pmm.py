@@ -116,7 +116,7 @@ def run_test(testcase, alloc_per_thread, device, pmm_init,
 
     print("instant_size = ", instant_size)
     SMs = getattr(device, 'MULTIPROCESSOR_COUNT')
-    size = 600 #SMs - 1;
+    size = SMs*SMs*SMs#SMs - 1;
    
     plt.figure(figsize=(30,15))
 

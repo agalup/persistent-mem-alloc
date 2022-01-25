@@ -14,7 +14,7 @@
 #include "cuda.h"
 #include "pmm-utils.cuh"
 
-#define MONO 0
+#define MONO 1
 
 //#include "src/gpu_hash_table.cuh"
 
@@ -320,9 +320,9 @@ void malloc_app_test(volatile int* exit_signal,
        
         if (MONO){
             request_id[thid] = thid;
-            d_memory[request_id[thid]] = reinterpret_cast<volatile int*>(mm->malloc(4+request_mem_size[thid])); 
-            d_memory[request_id[thid]][0] = 0;
-            new_ptr = &d_memory[request_id[thid]][1];
+            d_memory[thid] = reinterpret_cast<volatile int*>(mm->malloc(4+request_mem_size[thid])); 
+            d_memory[thid][0] = 0;
+            new_ptr = &d_memory[thid][1];
         }else{
             request((request_type)MALLOC, exit_signal, d_memory, &new_ptr, 
                     request_signal, request_mem_size, request_id, request_dest,
@@ -340,15 +340,17 @@ void malloc_app_test(volatile int* exit_signal,
         __threadfence();
 
         if (MONO){
-            mm->free((void*)new_ptr);
+            //mm->free((void*)new_ptr);
+            mm->free((void*)d_memory[thid]);
+            __threadfence();
+            d_memory[thid] = NULL;
         }else{
             request((request_type)FREE, exit_signal, d_memory, &new_ptr,
                     request_signal, request_mem_size, request_id, request_dest,
                     lock, size_to_alloc);
-
         }
 
-        __threadfence_system();
+        __threadfence();
     }
     //if (thid == 0)
     //    printf("inner iteration done\n");
