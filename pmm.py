@@ -23,12 +23,25 @@ from pylab import *
 
 from numba import cuda as cu
 
-def draw_graph(plt, testcase, alloc_per_thread, kernel_iter_num, iteration_num, 
+def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num, iteration_num, 
                SMs, allocs_size, sm_app, sm_mm, sm_gc, uni_req_num, array_size):
 
     print("results size ", array_size[0])
 
     size = array_size[0]
+
+    from numpy import arange
+
+    mono = ""
+    if MONO:
+        mono = "monolithic"
+    else:
+        mono = "mps"
+
+    pltname = mono + str(testcase) + "_" + str(SMs) + "SMs_" + \
+    str(kernel_iter_num) + "_" + str(iteration_num) + "_" + \
+    str(size)
+
 
     sm_app_list = [sm_app[0][i] for i in range(size)]
     sm_mm_list  = [ sm_mm[0][i] for i in range(size)]
@@ -47,6 +60,13 @@ def draw_graph(plt, testcase, alloc_per_thread, kernel_iter_num, iteration_num,
     mm  = np.array(sm_mm_list)
     gc  = np.array(sm_gc_list)
     req = np.array(uni_req_num)
+
+    results = {'Number of SMs assigned to application':app,
+                'Number of SMs assigned to memory manager':mm,
+                'Number of SMs assigned to garbage collector':gc,
+                'Number of requests per second':req}
+
+    DataFrame(results).to_csv(pltname+".csv")
 
     ax = plt.axes(projection = '3d')
     
@@ -92,11 +112,7 @@ def draw_graph(plt, testcase, alloc_per_thread, kernel_iter_num, iteration_num,
 
     plt.suptitle(str(testcase))
 
-    from numpy import arange
-
-    pltname = "mono" + str(testcase) + "_" + str(SMs) + "SMs_" + \
-    str(kernel_iter_num) + "_" + str(iteration_num) + "_" + \
-    str(size) + "_movie_"
+    
 
     ii = -135
     jj = -35.265
@@ -109,7 +125,7 @@ def draw_graph(plt, testcase, alloc_per_thread, kernel_iter_num, iteration_num,
     #plt.savefig(pltname + str(ii) + "_" + str(jj) + ".pdf")
 
        
-def run_test(testcase, alloc_per_thread, device, pmm_init, 
+def run_test(MONO, testcase, alloc_per_thread, device, pmm_init, 
             #perf_alloc, 
             instant_size, iteration_num, kernel_iter_num):
 
@@ -131,7 +147,7 @@ def run_test(testcase, alloc_per_thread, device, pmm_init,
     uni_req_num     = pointer((c_float * size)())
 
     print("pmm_init, use malloc")
-    pmm_init(kernel_iter_num, alloc_per_thread, instant_size, iteration_num, 
+    pmm_init(MONO, kernel_iter_num, alloc_per_thread, instant_size, iteration_num, 
              SMs, sm_app, sm_mm, sm_gc, requests_num, uni_req_num, array_size);
 
     #device.reset()
@@ -141,7 +157,7 @@ def run_test(testcase, alloc_per_thread, device, pmm_init,
     #           app_sync, uni_req_num, use_malloc)
 
     ##draw both
-    draw_graph(plt, testcase, alloc_per_thread, kernel_iter_num, 
+    draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num, 
                 iteration_num, SMs, requests_num, sm_app, sm_mm, 
                 sm_gc, uni_req_num, array_size)
   
@@ -207,7 +223,10 @@ def main(argv):
     print("ouroboros test")
     pmm_init = ouroboros.pmm_init
     #perf_alloc = ouroboros.perf_alloc
-    run_test("OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
+    run_test(0, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
+                instant_size, int(iteration_num), int(kernel_iter_num))
+
+    run_test(1, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
                 instant_size, int(iteration_num), int(kernel_iter_num))
 
     #device.reset()

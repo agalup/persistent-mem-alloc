@@ -14,8 +14,6 @@
 #include "cuda.h"
 #include "pmm-utils.cuh"
 
-#define MONO 1
-
 //#include "src/gpu_hash_table.cuh"
 
 using namespace std;
@@ -306,6 +304,7 @@ void malloc_app_test(volatile int* exit_signal,
         volatile int* lock,
         int size_to_alloc,
         int iter_num,
+        int MONO,
         MemoryManagerType* mm){
 
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
@@ -542,6 +541,7 @@ void start_application(int type,
                        int* exit_counter,
                        int size_to_alloc, 
                        int iter_num,
+                       int mono, 
                        bool& kernel_complete,
                        MemoryManagerType& memory_manager){
     // Run application
@@ -555,7 +555,7 @@ void start_application(int type,
     kernel<<<grid_size, block_size>>>(exit_signal, requests.d_memory, 
             requests.request_signal, requests.request_mem_size, 
             requests.request_id, requests.request_dest, exit_counter, requests.lock, 
-            size_to_alloc, iter_num, memory_manager.getDeviceMemoryManager());
+            size_to_alloc, iter_num, mono, memory_manager.getDeviceMemoryManager());
     //printf("kernel done, exit counter %d\n", exit_counter[0]);
     GUARD_CU(cudaPeekAtLastError());
 
@@ -615,11 +615,13 @@ void sync_streams(cudaStream_t& gc_stream,
 }
 
 
-void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size, 
+void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc, size_t* ins_size, 
               size_t num_iterations, int SMs, int* sm_app, int* sm_mm, int* sm_gc, 
               int* allocs, float* uni_req_per_sec, int* array_size){
 
     auto instant_size = *ins_size;
+
+    printf("mono : %d\n", mono);
 
     CUcontext default_ctx;
     GUARD_CU((cudaError_t)cuCtxGetCurrent(&default_ctx));
@@ -662,10 +664,10 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
     int it = 0;
 
     for (int app_grid_size=1; app_grid_size<SMs; ++app_grid_size){
-    //for (int app_grid_size = 1; app_grid_size < 5; ++app_grid_size){
+    //for (int app_grid_size=1; app_grid_size<2; ++app_grid_size){
 
     for (int mm_grid_size=1; mm_grid_size<(SMs-app_grid_size); ++mm_grid_size){
-    //for (int mm_grid_size = 1; mm_grid_size < 5; ++mm_grid_size){
+    //for (int mm_grid_size=1; mm_grid_size<2; ++mm_grid_size){
 
         int gc_grid_size = SMs - app_grid_size - mm_grid_size;
         if (gc_grid_size <= 0) continue;
@@ -758,7 +760,7 @@ void pmm_init(int kernel_iteration_num, int size_to_alloc, size_t* ins_size,
                 start_application(MALLOC, timing_malloc_app, malloc_total_sync, 
                               app_grid_size, block_size, app_ctx, exit_signal,
                               requests, exit_counter, size_to_alloc, 
-                              kernel_iteration_num, kernel_complete, memory_manager);
+                              kernel_iteration_num, mono, kernel_complete, memory_manager);
                 malloc_total_sync.stopMeasurement();
                 debug("app done, sync\n");
                 GUARD_CU((cudaError_t)cuCtxSynchronize());

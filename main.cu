@@ -10,8 +10,8 @@ int main(int argc, char *argv[]){
     size_t instant_size = 7 * 1024ULL * 1024ULL * 1024ULL;
     int size_to_alloc = 32;
     int iteration_num = 1;
-
     int kernel_iter_num = 1;
+    int mono = 0;
     
     if (argc > 1){
         size_to_alloc = atoi(argv[1]);
@@ -23,7 +23,10 @@ int main(int argc, char *argv[]){
         kernel_iter_num = atoi(argv[3]);
     }
     if (argc > 4){
-        instant_size = atoi(argv[4]);
+        mono = atoi(argv[4]);
+    }
+    if (argc > 5){
+        instant_size = atoi(argv[5]);
     }
     
     printf("size to alloc %d, iteration num %d, kernel iteration num %d, \
@@ -49,7 +52,7 @@ instant size %ld\n",
     //float* app_sync        = (float*)malloc(sizeof(float)*size);
     //float* uni_req_num     = (float*)malloc(sizeof(float)*size);
     
-    pmm_init(kernel_iter_num, size_to_alloc, &instant_size, iteration_num, SMs, 
+    pmm_init(mono, kernel_iter_num, size_to_alloc, &instant_size, iteration_num, SMs, 
             sm_app, sm_mm, sm_gc, allocs_size, uni_req_per_sec, array_size);
 
     GUARD_CU(cudaDeviceReset());
