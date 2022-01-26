@@ -117,10 +117,13 @@ void garbage_collector(volatile int** d_memory,
                        volatile int* request_ids, 
                        volatile int* request_mem_size,
                        volatile int* lock,
+                       volatile int* gc_started,
                        volatile int* exit_signal,
                        MemoryManagerType* mm){
     int thid = blockIdx.x * blockDim.x + threadIdx.x;
-    
+   
+    gc_started[0] = 1;
+
     while (! exit_signal[0]){
         for (int request_id=thid; !exit_signal[0] && request_id<requests_number[0]; 
                 request_id += blockDim.x*gridDim.x){
@@ -141,6 +144,7 @@ void garbage_collector(volatile int** d_memory,
 //producer
 __global__
 void mem_manager(volatile int* exit_signal, 
+        volatile int* mm_started,
         volatile int* requests_number, 
         volatile int* request_counter,
         volatile int* request_signal, 
@@ -151,6 +155,8 @@ void mem_manager(volatile int* exit_signal,
         volatile int* request_mem_size,
         volatile int* lock){
     int thid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    mm_started[0] = 1;
     
     while (! exit_signal[0]){
         for (int request_id=thid; !exit_signal[0] && request_id<requests_number[0]; 
@@ -452,9 +458,8 @@ void start_memory_manager(PerfMeasure& timing_mm,
                           int* mm_started,
                           RequestType& requests,
                           MemoryManagerType& memory_manager){
-    *mm_started = 1;
     timing_mm.startMeasurement();
-    mem_manager<<<mm_grid_size, block_size>>>(exit_signal, 
+    mem_manager<<<mm_grid_size, block_size>>>(exit_signal, mm_started,
             requests.requests_number, requests.request_counter, requests.request_signal, 
             requests.request_id, requests.request_dest,
 #ifdef OUROBOROS__
@@ -478,7 +483,6 @@ void start_garbage_collector(PerfMeasure& timing_gc,
                           int* gc_started,
                           RequestType& requests,
                           MemoryManagerType& memory_manager){
-    *gc_started = 1;
     timing_gc.startMeasurement();
     garbage_collector<<<gc_grid_size, block_size>>>(
             requests.d_memory, 
@@ -488,6 +492,7 @@ void start_garbage_collector(PerfMeasure& timing_gc,
             requests.request_id,
             requests.request_mem_size, 
             requests.lock,
+            gc_started,
             exit_signal,
 #ifdef OUROBOROS__
             memory_manager.getDeviceMemoryManager()
@@ -748,7 +753,11 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc, size_t* ins
         
             //std::this_thread::sleep_for(std::chrono::seconds(1));
 
+            printf("-");
+            fflush(stdout);
             while ((! *gc_started) || (! *mm_started));
+            printf(".");
+            fflush(stdout);
 
             // Run APP (all threads do malloc)
             bool kernel_complete = false;
@@ -799,6 +808,7 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc, size_t* ins
             GUARD_CU(cudaDeviceSynchronize());
             GUARD_CU(cudaPeekAtLastError());
         }
+        printf("\n");
         debug("done\n");
 
         GUARD_CU((cudaError_t)cuCtxDestroy(app_ctx));
