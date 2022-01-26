@@ -1,5 +1,5 @@
 #include "pmm.cu"
-#include "monolitic_mm.cu"
+//#include "monolitic_mm.cu"
 #include "pmm-utils.cuh"
 
 using namespace std;
