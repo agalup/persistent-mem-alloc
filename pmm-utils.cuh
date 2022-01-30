@@ -2,11 +2,11 @@
 #ifndef _pmm_utils_h
 #define _pmm_utils_h
 
-#include "device/Ouroboros_impl.cuh"
-#include "device/MemoryInitialization.cuh"
-#include "InstanceDefinitions.cuh"
+//#include "device/Ouroboros_impl.cuh"
+//#include "device/MemoryInitialization.cuh"
+//#include "InstanceDefinitions.cuh"
 #include "PerformanceMeasure.cuh"
-#include "Utility.h"
+//#include "Utility.h"
 #include "cuda.h"
 #include <algorithm>
 #include <iostream>
@@ -45,13 +45,15 @@ extern "C"{
 #define MALLOC      3
 #define FREE        5
 #define GC          7
+#define MUL         9
 
 enum request_type {
-    request_empty       = EMPTY,
-    request_done        = DONE,
-    request_malloc      = MALLOC, 
-    request_free        = FREE,
-    request_gc          = GC
+    request_empty  = EMPTY,
+    request_done   = DONE,
+    request_malloc = MALLOC, 
+    request_free   = FREE,
+    request_gc     = GC,
+    reqeust_mul    = MUL
 };
 cudaError_t GRError(cudaError_t error, const char *message,
                     const char *filename, int line, bool print) {
