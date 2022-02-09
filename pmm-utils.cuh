@@ -76,9 +76,6 @@ struct RequestType{
     void memset();
     void free();
 
-    // SlabHashTable
-    //gpu_hash_table<uint32_t, uint32_t, SlabHashTypeT::ConcurrentMap>* hash_table;
-
 };
 
 void RequestType::init(size_t Size){
@@ -156,8 +153,8 @@ void RequestType::memset(){
     GUARD_CU(cudaMemset((void*)request_id, -1,      size * sizeof(volatile int)));
     GUARD_CU(cudaMemset((void*)request_mem_size, 0, size * sizeof(volatile int)));
     GUARD_CU(cudaMemset((void*)lock, 0,             size * sizeof(volatile int)));
-    //GUARD_CU(cudaMemset((int**)d_memory, NULL,      size * sizeof(volatile int*)));
-    //GUARD_CU(cudaMemset((int**)request_dest, NULL,  size * sizeof(volatile int*)));
+    GUARD_CU(cudaMemset((int**)d_memory, NULL,      size * sizeof(volatile int*)));
+    GUARD_CU(cudaMemset((int**)request_dest, NULL,  size * sizeof(volatile int*)));
 
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
