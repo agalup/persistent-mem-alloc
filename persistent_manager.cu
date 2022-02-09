@@ -35,6 +35,9 @@ void _request_processing(
     
     switch (request_signal[request_id]){
 
+        case MATRIX_MUL:
+            break;
+
         case MALLOC:
             if (addr_id == -1){
                 addr_id = atomicAdd((int*)&request_counter[0], 1);
@@ -280,7 +283,6 @@ void request(request_type type,
 __global__
 void mul_app_test(int type, 
               volatile int* exit_signal,
-              volatile int** d_memory, 
               volatile int* request_signal, 
               volatile int* request_mem_size,
               volatile int* request_id, 
@@ -302,7 +304,7 @@ void mul_app_test(int type,
        
         if (MONO){
             request_id[thid] = thid;
-            sharedABMultiply(A, B, C, N);
+            //sharedABMultiply(A, B, C, N);
         }else{
             /*
             request(type, exit_signal, d_memory, &new_ptr, 
@@ -318,28 +320,6 @@ void mul_app_test(int type,
 
     __threadfence();
     //printf("exit counter[%d] = %d\n", thid, exit_counter[0]);
-}
-
-//consumer2
-__global__
-void free_app_test(volatile int* exit_signal, 
-              volatile int** d_memory, 
-              volatile int* request_signal, 
-              volatile int* request_mem_size,
-              volatile int* request_id, 
-              volatile int** request_dest, 
-              volatile int* exit_counter, 
-              volatile int* lock,
-              int size_to_alloc,
-              int iter_num){
-    
-    __threadfence();
-   
-    request((request_type)FREE, exit_signal, d_memory, NULL, 
-            request_signal, request_mem_size, request_id, request_dest,
-            lock, 0);
-
-    atomicAdd((int*)&exit_counter[0], 1);
 }
 
 void check_persistent_kernel_results(int* exit_signal, 
@@ -385,12 +365,9 @@ void check_persistent_kernel_results(int* exit_signal,
     }
     GUARD_CU(cudaPeekAtLastError());
 }
-
-void createStreams(cudaStream_t& gc_stream, 
-                   cudaStream_t& mm_stream, 
+/*
+void createStreams(cudaStream_t& mm_stream, 
                    cudaStream_t& app_stream){
-    GUARD_CU(cudaStreamCreateWithFlags( &gc_stream, cudaStreamNonBlocking));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaStreamCreateWithFlags( &mm_stream, cudaStreamNonBlocking));
     GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaStreamCreateWithFlags(&app_stream, cudaStreamNonBlocking));
@@ -416,7 +393,6 @@ void start_memory_manager(uint32_t mm_grid_size,
     GUARD_CU(cudaPeekAtLastError());
 
 }
-/*
 void start_garbage_collector(PerfMeasure& timing_gc, 
                           uint32_t gc_grid_size,
                           uint32_t block_size, 
@@ -477,7 +453,7 @@ void clean_memory(uint32_t grid_size,
     GUARD_CU(cudaPeekAtLastError());
 }
 */
-
+/*
 void start_application(int type, 
                        uint32_t grid_size,
                        uint32_t block_size, 
@@ -520,7 +496,6 @@ void sync_streams(cudaStream_t& gc_stream,
     GUARD_CU(cudaPeekAtLastError());
 
 }
-
 
 void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc, size_t* ins_size, 
               size_t num_iterations, int SMs, int* sm_app, int* sm_man, int* sm_gc, 
@@ -590,7 +565,7 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc, size_t* ins
                 GUARD_CU((cudaError_t)cuCtxSetCurrent(app_ctx));
                 debug("start app\n");
                 app_synced.startMeasurement();
-                start_application(MUL, app_grid_size, block_size, app_ctx, 
+                start_application(MATRIX_MUL, app_grid_size, block_size, app_ctx, 
                         exit_signal, requests, exit_counter, size_to_alloc, 
                         kernel_iteration_num, mono, kernel_complete);
                 debug("app done, sync\n");
@@ -697,7 +672,7 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc, size_t* ins
                         //GUARD_CU((cudaError_t)cuCtxSynchronize());
                         debug("start app\n");
                         app_synced.startMeasurement();
-                        start_application(MUL, app_grid_size, block_size, app_ctx, 
+                        start_application(MATRIX_MUL, app_grid_size, block_size, app_ctx, 
                                 exit_signal, requests, exit_counter, size_to_alloc, 
                                 kernel_iteration_num, mono, kernel_complete);
                         debug("app done, sync\n");
@@ -747,5 +722,5 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc, size_t* ins
     }
     
 }
-
+*/
 }

@@ -2,9 +2,6 @@
 #ifndef _pmm_utils_h
 #define _pmm_utils_h
 
-//#include "device/Ouroboros_impl.cuh"
-//#include "device/MemoryInitialization.cuh"
-//#include "InstanceDefinitions.cuh"
 #include "PerformanceMeasure.cuh"
 //#include "Utility.h"
 #include "cuda.h"
@@ -26,26 +23,12 @@ extern "C"{
 #define debug(a...)
 #endif
 
-#ifdef HALLOC__
-#include "Instance.cuh"
-#endif
-
-
-#ifdef OUROBOROS__
-    //Ouroboros initialization
-    #define MemoryManagerType OuroPQ
-#endif
-#ifdef HALLOC__
-    //Halloc initialization
-    #define MemoryManagerType MemoryManagerHalloc
-#endif
-
 #define EMPTY       0
 #define DONE        2
 #define MALLOC      3
 #define FREE        5
 #define GC          7
-#define MUL         9
+#define MATRIX_MUL  9
 
 enum request_type {
     request_empty  = EMPTY,
@@ -53,7 +36,7 @@ enum request_type {
     request_malloc = MALLOC, 
     request_free   = FREE,
     request_gc     = GC,
-    reqeust_mul    = MUL
+    reqeust_mul    = MATRIX_MUL
 };
 cudaError_t GRError(cudaError_t error, const char *message,
                     const char *filename, int line, bool print) {
@@ -82,6 +65,9 @@ struct RequestType{
     volatile int* request_id; 
     volatile int* request_mem_size;
     volatile int* lock;
+    volatile int* A;
+    volatile int* B;
+    volatile int* C;
     volatile int** d_memory{nullptr};
     volatile int** request_dest;
     int size;
