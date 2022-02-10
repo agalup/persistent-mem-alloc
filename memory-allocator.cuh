@@ -19,6 +19,8 @@ cudaError_t GRError(cudaError_t error, const char *message,
   }\
 
 struct Memory_List{
+    void* next;
+    
 };
 
 struct MemoryAllocator{

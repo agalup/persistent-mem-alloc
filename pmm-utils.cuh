@@ -23,20 +23,14 @@ extern "C"{
 #define debug(a...)
 #endif
 
-#define EMPTY       0
-#define DONE        2
-#define MALLOC      3
-#define FREE        5
-#define GC          7
-#define MATRIX_MUL  9
+#define EMPTY 0
+#define DONE  2
+#define MOCK  9
 
 enum request_type {
     request_empty  = EMPTY,
     request_done   = DONE,
-    request_malloc = MALLOC, 
-    request_free   = FREE,
-    request_gc     = GC,
-    reqeust_mul    = MATRIX_MUL
+    reqeust_mock   = MOCK
 };
 cudaError_t GRError(cudaError_t error, const char *message,
                     const char *filename, int line, bool print) {
@@ -153,14 +147,13 @@ void RequestType::memset(){
     GUARD_CU(cudaMemset((void*)request_id, -1,      size * sizeof(volatile int)));
     GUARD_CU(cudaMemset((void*)request_mem_size, 0, size * sizeof(volatile int)));
     GUARD_CU(cudaMemset((void*)lock, 0,             size * sizeof(volatile int)));
-    GUARD_CU(cudaMemset((int**)d_memory, NULL,      size * sizeof(volatile int*)));
-    GUARD_CU(cudaMemset((int**)request_dest, NULL,  size * sizeof(volatile int*)));
+    GUARD_CU(cudaMemset((int**)d_memory, 0,         size * sizeof(volatile int*)));
+    GUARD_CU(cudaMemset((int**)request_dest, 0,     size * sizeof(volatile int*)));
 
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
 }
-
-
+/*
 __global__
 void copy(int** d_memory0, int* d_memory, int size){
     int thid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -180,7 +173,7 @@ void mem_test(int** d_memory0, int requests_num, int blocks, int threads){
     GUARD_CU(cudaMemcpy(h_memory, d_memory, sizeof(int)*requests_num, cudaMemcpyDeviceToHost));
     GUARD_CU(cudaStreamSynchronize(0));
     GUARD_CU(cudaPeekAtLastError());
-}
+}*/
 
 __device__ void acquire_semaphore(volatile int* lock, int i){
     while (atomicCAS((int*)&lock[i], 0, 1) != 0){
@@ -192,24 +185,6 @@ __device__ void acquire_semaphore(volatile int* lock, int i){
 __device__ void release_semaphore(volatile int* lock, int i){
     __threadfence();
     lock[i] = 0;
-}
-
-//test
-__global__
-void test1(volatile int** d_memory, int size){
-    int thid = blockDim.x * blockIdx.x + threadIdx.x;
-    if (thid < size){
-        assert(d_memory[thid]);
-        d_memory[thid][0] *= 100;
-    }
-}
-
-__global__
-void test2(volatile int** d_memory, int size){
-    int thid = blockDim.x * blockIdx.x + threadIdx.x;
-    if (thid < size){
-        assert(d_memory[thid] == NULL);
-    }
 }
 }
 #endif

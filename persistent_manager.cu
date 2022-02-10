@@ -31,62 +31,19 @@ void _request_processing(
     acquire_semaphore((int*)lock, request_id);
     debug("mm: request recieved %d\n", request_id); 
     auto addr_id = request_ids[request_id];
-    int request_status;
     
     switch (request_signal[request_id]){
 
-        case MATRIX_MUL:
-            if (addr_id == -1){
-                addr_id = atomicAdd((int*)&request_counter[0], 1);
-                request_ids[request_id] = addr_id;
-            }
-            __threadfence();
-            break;
-
-    /*    case MALLOC:
+        case MOCK:
             if (addr_id == -1){
                 addr_id = atomicAdd((int*)&request_counter[0], 1);
                 request_ids[request_id] = addr_id;
             }else{
-                assert(d_memory[addr_id] == NULL);
+                printf("error\n");
             }
-            __threadfence();
-            //d_memory[addr_id] = reinterpret_cast<volatile int*>
-            //    (mm->malloc(4+request_mem_size[request_id]));
-            __threadfence();
-            assert(d_memory[addr_id]);
-            d_memory[addr_id][0] = 0;
-            request_dest[request_id] = &d_memory[addr_id][1];
             atomicExch((int*)&request_signal[request_id], request_done);
-            break;
-
-        case FREE:
-            assert(d_memory[addr_id]);
-            if (d_memory[addr_id][0] != 0)
-                printf("d_memory{%d} = %d\n", addr_id, d_memory[addr_id][0]);
-            assert(d_memory[addr_id][0] == 0);
-            request_status = d_memory[addr_id][0] - 1;
-            d_memory[addr_id][0] -= 1;
-            request_dest[request_id] = NULL;
-            assert(d_memory[addr_id][0] == -1);
-            if (request_status < 0){
-                atomicExch((int*)&request_signal[request_id], request_gc);
-            }else{
-                assert(1);
-                printf("should not be here!\n");
-                atomicExch((int*)&request_signal[request_id], request_done);
-            }
-            break;
-
-        case GC:
-            assert(d_memory[addr_id]);
-            assert(d_memory[addr_id][0] == -1);
             __threadfence();
-            //mm->free((void*)d_memory[addr_id]);
-            __threadfence();
-            d_memory[addr_id] = NULL;
-            atomicExch((int*)&request_signal[request_id], request_done);
-            break;*/
+            break;
 
         default:
             printf("request processing fail\n");
@@ -95,38 +52,6 @@ void _request_processing(
     release_semaphore((int*)lock, request_id);
     // SEMAPHORE
 }
-/*
-__global__
-void garbage_collector(volatile int** d_memory,
-                       volatile int* requests_number, 
-                       volatile int* request_counter,
-                       volatile int* request_signal, 
-                       volatile int* request_ids, 
-                       volatile int* request_mem_size,
-                       volatile int* lock,
-                       volatile int* gc_started,
-                       volatile int* exit_signal,
-                       MemoryManagerType* mm){
-    int thid = blockIdx.x * blockDim.x + threadIdx.x;
-   
-    gc_started[0] = 1;
-
-    while (! exit_signal[0]){
-        for (int request_id=thid; !exit_signal[0] && request_id<requests_number[0]; 
-                request_id += blockDim.x*gridDim.x){
-
-            __threadfence();
-            if (request_signal[request_id] == GC){
-                _request_processing(request_id, exit_signal, request_signal,
-                                    request_counter, request_ids, NULL, mm, 
-                                    d_memory, request_mem_size, lock);
-                __threadfence();
-            }
-        }
-        __threadfence();
-    }
-}
-*/
 
 //producer
 __global__
@@ -149,7 +74,7 @@ void mem_manager(volatile int* exit_signal,
                 request_id += blockDim.x*gridDim.x){
 
             __threadfence();
-            if (request_signal[request_id] == MATRIX_MUL){
+            if (request_signal[request_id] == MOCK){
                 _request_processing(request_id, exit_signal, request_signal, 
                                     request_counter, request_ids, request_dest,
                                     d_memory, request_mem_size, lock);
@@ -180,7 +105,6 @@ void post_request(request_type type,
     acquire_semaphore((int*)lock, thid);
     // SIGNAL update
     atomicExch((int*)&request_signal[thid], type);
-    
     release_semaphore((int*)lock, thid);
     __threadfence();
     // SEMAPHORE
@@ -201,30 +125,14 @@ void request_processed(request_type type,
     __threadfence();
     acquire_semaphore((int*)lock, thid);
     switch (type){
-        case MATRIX_MUL:
+        case MOCK:
             req_id = request_id[thid];
-        case MALLOC:
-            req_id = request_id[thid];
-            if (req_id >= 0 && !exit_signal[0]) {
-                *dest = request_dest[thid];
-                assert(d_memory[req_id] != NULL);
-                if (d_memory[req_id][0] != 0)
-                    printf("d_memory[%d] = %d\n", req_id, d_memory[req_id][0]);
-                //assert(d_memory[req_id][0] == 0);
-                assert(*dest != NULL);
-                assert(request_dest[thid] == *dest);
-            }
-            break;
-        case FREE:
-            //assert(d_memory[req_id] == NULL);
-            break;
-        case GC:
-            //assert(d_memory[req_id] == NULL);
             break;
         default:
             printf("error\n");
             break;
     }
+    // SIGNAL update
     request_signal[thid] = request_empty;
     release_semaphore((int*)lock, thid);
     __threadfence();
@@ -246,7 +154,7 @@ void request(request_type type,
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
     int req_id = -1;
 
-    // wait for success
+    // POST REQUEST: wait for success
     while (!exit_signal[0]){
         if (request_signal[thid] == request_empty){
             post_request(type, dest, lock, request_mem_size, request_id, 
@@ -255,10 +163,10 @@ void request(request_type type,
         }
         __threadfence();
     }
-
     __threadfence();
 
-    //int it = 0;
+    // REQUEST PROCESSED
+    // int it = 0;
     // wait for success
     while (!exit_signal[0]){
         /*char* type_ = new char[10];
