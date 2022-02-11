@@ -99,6 +99,7 @@ void post_request(request_type type,
                   int size_to_alloc){
 
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
+    debug("request %d, block %d\n", thid, blockIdx.x);
     
     __threadfence();
     // SEMAPHORE
@@ -135,6 +136,7 @@ void request_processed(request_type type,
     // SIGNAL update
     request_signal[thid] = request_empty;
     release_semaphore((int*)lock, thid);
+    debug("request %d, block %d done\n", thid, blockIdx.x);
     __threadfence();
     // SEMAPHORE
 }

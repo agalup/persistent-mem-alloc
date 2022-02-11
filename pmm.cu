@@ -29,13 +29,13 @@ void allocManaged(int** ptr, size_t size){
     GUARD_CU(cudaDeviceSynchronize());
 }
 
-void start_memory_manager(uint32_t mm_grid_size,
+void start_memory_manager(uint32_t mm_sm_size,
                           uint32_t block_size, 
                           CUcontext& mm_ctx,
                           int* exit_signal,
                           int* mm_started,
                           RequestType& requests){
-    mem_manager<<<mm_grid_size, block_size>>>(exit_signal, mm_started,
+    mem_manager<<<mm_sm_size, block_size>>>(exit_signal, mm_started,
             requests.requests_number, requests.request_counter, requests.request_signal, 
             requests.request_id, requests.request_dest,
             requests.d_memory, requests.request_mem_size, requests.lock);
@@ -141,9 +141,9 @@ void mono_version(int mono, int kernel_iteration_num, int size_to_alloc,
     int* mm_started;
     allocManaged(&mm_started, sizeof(uint32_t));
 
-    int app_grid_size = SMs;
-    int requests_num = app_grid_size * block_size;
-    sm_app[0] = app_grid_size;
+    int app_sm_size = SMs;
+    int requests_num = app_sm_size * block_size;
+    sm_app[0] = app_sm_size;
     sm_man[0] = 0;
     matrix_mul[0] = requests_num;
 
@@ -171,7 +171,7 @@ void mono_version(int mono, int kernel_iteration_num, int size_to_alloc,
             GUARD_CU((cudaError_t)cuCtxSetCurrent(app_ctx));
             debug("start app\n");
             app_synced.startMeasurement();
-            start_application((request_type)MOCK, app_grid_size, block_size, 
+            start_application((request_type)MOCK, app_sm_size, block_size, 
                     app_ctx, exit_signal, requests, exit_counter, size_to_alloc, 
                     kernel_iteration_num, mono, kernel_complete);
             debug("app done, sync\n");
@@ -202,7 +202,7 @@ void mono_version(int mono, int kernel_iteration_num, int size_to_alloc,
         (app_synced_time.mean_/kernel_iteration_num);
 
     printf("  %d\t\t %d\t\t %d\t\t %.2lf\t\t \n", requests_num, 
-            app_grid_size, 0, uni_req_per_sec[0]);
+            app_sm_size, 0, uni_req_per_sec[0]);
 
     *array_size = 1;
 }
@@ -222,7 +222,8 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
     cudaStream_t mm_stream, app_stream;
     createStreams(mm_stream, app_stream);
 
-    int block_size = 1024;
+    int block_size = 512;
+   // int block_size = 10;//24;
     std::cout << "#requests\t" << "#sm app\t\t" << "#sm mm\t\t" 
         << "#sm gc\t\t" << "#malloc and free per sec\n";
 
@@ -247,22 +248,27 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
 
         int it = 0;
 
-        for (int app_grid_size = 1; app_grid_size < SMs; ++app_grid_size){
-        //for (int app_grid_size = 1; app_grid_size < 2; ++app_grid_size){
-            int mm_grid_size = SMs - app_grid_size;
+        for (int app_sm_size = SMs - 1; app_sm_size > 0; --app_sm_size){
+        //for (int app_sm_size = 1; app_sm_size < SMs; ++app_sm_size){
+           
+            int mm_sm_size = SMs - app_sm_size;
+            int app_grid_size = 2 * app_sm_size;
+            int mm_grid_size = 2 * mm_sm_size;
             int requests_num{app_grid_size*block_size};
 
             //output
-            sm_app[it] = app_grid_size;
-            sm_man [it] = mm_grid_size;
+            sm_app[it] = app_sm_size;
+            sm_man [it] = mm_sm_size;
             matrix_mul[it] = requests_num;
 
-            printf("SM: app %d, mm %d, requests %d\n", app_grid_size, mm_grid_size, requests_num);
+            printf("SM: app %d, mm %d\n", app_sm_size, mm_sm_size);
+            printf("block size %d, app grid size %d, mm grid size %d\n", block_size, app_grid_size, mm_grid_size);
+            printf("requests %d\n", requests_num);
 
             CUexecAffinityParam_v1 app_param{
-                CUexecAffinityType::CU_EXEC_AFFINITY_TYPE_SM_COUNT, (unsigned int)app_grid_size};
+                CUexecAffinityType::CU_EXEC_AFFINITY_TYPE_SM_COUNT, (unsigned int)app_sm_size};
             CUexecAffinityParam_v1 mm_param{
-                CUexecAffinityType::CU_EXEC_AFFINITY_TYPE_SM_COUNT, (unsigned int)mm_grid_size};
+                CUexecAffinityType::CU_EXEC_AFFINITY_TYPE_SM_COUNT, (unsigned int)mm_sm_size};
 
             auto affinity_flags = CUctx_flags::CU_CTX_SCHED_AUTO;
             CUcontext app_ctx, mm_ctx;
@@ -352,7 +358,7 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
             uni_req_per_sec[it]  = (requests_num * 1000.0)/(app_synced_time.mean_/kernel_iteration_num);
 
             printf("  %d\t\t %d\t\t %d\t\t %.2lf\t\t \n", requests_num, 
-                    app_grid_size, mm_grid_size, uni_req_per_sec[it]);
+                    app_sm_size, mm_sm_size, uni_req_per_sec[it]);
 
             ++it;
         }

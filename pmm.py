@@ -69,26 +69,26 @@ def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num, iteration
     DataFrame(results).to_csv(pltname+".csv")
 
     ax = plt.axes(projection = '3d')
-    
+
     SIZE = app[size-1]+1
     SIZE2 = SIZE**2
-    req_f = np.zeros(SIZE2).reshape(SIZE, SIZE)
 
-    app_f = np.arange(1, 35, 1)
-    mm_f = np.arange(1, 35, 1)
-    app_f, mm_f = np.meshgrid(app_f, mm_f)
-    gc_f = SIZE - app_f - mm_f
+    #req_f = np.zeros(SIZE2).reshape(SIZE, SIZE)
+    #app_f = np.arange(1, 35, 1)
+    #mm_f = np.arange(1, 35, 1)
+    #app_f, mm_f = np.meshgrid(app_f, mm_f)
+    #gc_f = SIZE - app_f - mm_f
 
-    print(app_f)
-    print(mm_f)
-    print(gc_f)
+    #print(app_f)
+    #print(mm_f)
+    #print(gc_f)
 
-    for i in range(size):
-         req_f[app[i]][mm[i]] = req[i]
+    #for i in range(size):
+    #     req_f[app[i]][mm[i]] = req[i]
 
-    print(app_f.shape)
-    print(mm_f.shape)
-    print(gc_f.shape)
+    #print(app_f.shape)
+    #print(mm_f.shape)
+    #print(gc_f.shape)
 
     import matplotlib.cm as cmx
     from mpl_toolkits.mplot3d import Axes3D
@@ -111,8 +111,6 @@ def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num, iteration
     ax.set_ylabel('gc')
 
     plt.suptitle(str(testcase))
-
-    
 
     ii = -135
     jj = -35.265
@@ -195,8 +193,7 @@ def run_test(MONO, testcase, alloc_per_thread, device, pmm_init,
 
 def main(argv):
     ### load shared libraries
-    ouroboros = cdll.LoadLibrary('ouroboros_mm.so')
-    #halloc = cdll.LoadLibrary('halloc_mm.so')
+    mock = cdll.LoadLibrary('mock.so')
 
     ### GPU properties
     device = cu.get_current_device()
@@ -220,22 +217,13 @@ def main(argv):
     print("alloc_per_thread {} iteration_num {} iteration_per_kernel {} instant_size {}".format(alloc_per_thread,
     iteration_num, kernel_iter_num, instant_size))
     
-    print("ouroboros test")
-    pmm_init = ouroboros.pmm_init
-    #perf_alloc = ouroboros.perf_alloc
-    run_test(0, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
+    print("mock test")
+    pmm_init = mock.pmm_init
+    run_test(0, "MOCK", int(alloc_per_thread), device, pmm_init, 
                 instant_size, int(iteration_num), int(kernel_iter_num))
 
-    run_test(1, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
+    run_test(1, "MOCK", int(alloc_per_thread), device, pmm_init,
                 instant_size, int(iteration_num), int(kernel_iter_num))
-
-    #device.reset()
-    
-    #print("halloc test")
-    #pmm_init = halloc.pmm_init
-    #perf_alloc = halloc.perf_alloc
-    #run_test("HALLOC", int(alloc_per_thread), device, pmm_init, perf_alloc, malloc_on, instant_size, int(iteration_num))
-
 
 if __name__ == "__main__":
     main(sys.argv[1:])
