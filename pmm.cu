@@ -45,33 +45,47 @@ void start_memory_manager(uint32_t mm_sm_size,
 
 //consumer
 __global__
-void mock_app(request_type type, 
+void mono_mock_app(request_type type, 
               volatile int* exit_signal,
-              volatile int** d_memory,
               volatile int* request_signal, 
-              volatile int* request_mem_size,
               volatile int* request_id, 
-              volatile int** request_dest, 
               volatile int* exit_counter, 
               volatile int* lock,
-              int size_to_alloc,
-              int iter_num,
-              int MONO){
+              int iter_num
+              ){
 
-    int thid = blockDim.x * blockIdx.x + threadIdx.x;
+    for (int i=0; i<iter_num; ++i){
+        request_id[thid()] = thid();
+    }
+    atomicAdd((int*)&exit_counter[0], 1);
+    __threadfence();
+}
+
+//consumer
+__global__
+void mock_app(request_type type, 
+              volatile int* exit_signal,
+              //volatile int** d_memory,
+              volatile int* request_signal, 
+              //volatile int* request_mem_size,
+              volatile int* request_id, 
+              //volatile int** request_dest, 
+              volatile int* exit_counter, 
+              volatile int* lock,
+              //int size_to_alloc,
+              int iter_num
+              ){
+
+    //int thid = blockDim.x * blockIdx.x + threadIdx.x;
 
     for (int i=0; i<iter_num; ++i){
         __threadfence();
 
-        volatile int* new_ptr = NULL;
-       
-        if (MONO){
-            request_id[thid] = thid;
-        }else{
-            request(type, exit_signal, d_memory, &new_ptr, 
-                    request_signal, request_mem_size, request_id, 
-                    request_dest, lock, size_to_alloc);
-        }
+        request(type, exit_signal, /*d_memory, &new_ptr,*/ 
+                request_signal, /*request_mem_size, 
+                                  request_id,  request_dest, */
+                lock/*, size_to_alloc*/);
+
         __threadfence();
     }
     
@@ -94,13 +108,21 @@ void start_application(request_type type,
                        bool& kernel_complete){
     // Run application
     //GUARD_CU(cudaPeekAtLastError());
-    auto kernel = mock_app;
-    
-    //printf("start kernel\n");
-    kernel<<<grid_size, block_size>>>(type, exit_signal, requests.d_memory,
-            requests.request_signal, requests.request_mem_size, 
-            requests.request_id, requests.request_dest, exit_counter, 
-            requests.lock, size_to_alloc, iter_num, mono);
+   
+    if (mono){
+        mono_mock_app<<<grid_size, block_size>>>(type, exit_signal, 
+                requests.request_signal, requests.request_id, exit_counter,
+                requests.lock, iter_num);
+    }else{
+        //printf("start kernel\n");
+        mock_app<<<grid_size, block_size>>>(type, exit_signal, 
+                /*requests.d_memory,*/
+                requests.request_signal, 
+                /*requests.request_mem_size, */
+                requests.request_id, 
+                /*requests.request_dest, */ exit_counter, 
+                requests.lock,/* size_to_alloc,*/ iter_num);
+    }
 
     //printf("kernel done, exit counter %d\n", exit_counter[0]);
     GUARD_CU(cudaPeekAtLastError());

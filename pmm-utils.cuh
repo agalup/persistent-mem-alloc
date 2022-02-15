@@ -175,16 +175,34 @@ void mem_test(int** d_memory0, int requests_num, int blocks, int threads){
     GUARD_CU(cudaPeekAtLastError());
 }*/
 
-__device__ void acquire_semaphore(volatile int* lock, int i){
-    while (atomicCAS((int*)&lock[i], 0, 1) != 0){
+__device__
+inline int thid(){
+    return blockIdx.x * blockDim.x + threadIdx.x;
+}
+
+//__device__ void acquire_semaphore(volatile int* lock, int i){
+//    while (atomicCAS((int*)&lock[i], 0, 1) != 0){
+//        //printf("acq semaphore: thread %d\n", threadIdx.x);
+//    }
+//    __threadfence();
+//}
+
+__device__ 
+void acquire_semaphore(int* lock){
+    while (atomicCAS(lock, 0, 1) != 0){
         //printf("acq semaphore: thread %d\n", threadIdx.x);
     }
     __threadfence();
 }
 
-__device__ void release_semaphore(volatile int* lock, int i){
+__device__ 
+void release_semaphore(int* lock){
     __threadfence();
-    lock[i] = 0;
+    *lock = 0;
 }
+//__device__ void release_semaphore(volatile int* lock, int i){
+//    __threadfence();
+//    lock[i] = 0;
+//}
 }
 #endif
