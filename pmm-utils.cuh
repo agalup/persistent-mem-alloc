@@ -59,9 +59,6 @@ struct RequestType{
     volatile int* request_id; 
     volatile int* request_mem_size;
     volatile int* lock;
-    volatile int* A;
-    volatile int* B;
-    volatile int* C;
     volatile int** d_memory{nullptr};
     volatile int** request_dest;
     int size;

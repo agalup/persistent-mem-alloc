@@ -17,57 +17,23 @@ extern "C" {
 __device__
 void _request_processing(
         int request_id, 
-        //volatile int* exit_signal,
         volatile int* request_signal,
         volatile int* request_counter,
         volatile int* request_ids, 
-        //volatile int** request_dest, 
-        //volatile int** d_memory,
-        //volatile int* request_mem_size,
         volatile int* lock){
 
     // SEMAPHORE
-    //acquire_semaphore((int*)lock, request_id);
-    //int* ptr = (int*)(lock + request_id);
-    //acquire_semaphore(ptr);
     acquire_semaphore((int*)(lock + request_id));
-    //debug("mm: request recieved %d\n", request_id); 
-    //auto addr_id = request_ids[request_id];
-
     if (request_signal[request_id] == MOCK){
-        request_ids[request_id] = (request_ids[request_id] == -1 ? atomicAdd((int*)&request_counter[0], 1) :
-        request_ids[request_id]);
+        if (request_ids[request_id] == -1){
+            request_ids[request_id] = atomicAdd((int*)&request_counter[0], 1);
+        }
         atomicExch((int*)&request_signal[request_id], DONE);
         __threadfence();
     }
-    
-    /*switch (request_signal[request_id]){
-
-        case MOCK:
-            //if (addr_id == -1){
-                //addr_id = atomicAdd((int*)&request_counter[0], 1);
-                //request_ids[request_id] = addr_id;
-            if (request_ids[request_id] == -1){
-                request_ids[request_id] = atomicAdd((int*)&request_counter[0], 1);
-    //        }else{
-      //          printf("error\n");
-            }
-            atomicExch((int*)&request_signal[request_id], request_done);
-            __threadfence();
-            break;
-
-        default:
-            break;
-     //       printf("request processing fail\n");
-
-    }*/
-
-    //release_semaphore((int*)lock, request_id);
     release_semaphore((int*)(lock + request_id));
     // SEMAPHORE
 }
-
-
 
 //producer
 __global__
@@ -77,23 +43,19 @@ void mem_manager(volatile int* exit_signal,
         volatile int* request_counter,
         volatile int* request_signal, 
         volatile int* request_ids, 
-        volatile int** request_dest,
-        volatile int** d_memory,
-        volatile int* request_mem_size,
         volatile int* lock){
-    //int thid = blockIdx.x * blockDim.x + threadIdx.x;
 
     mm_started[0] = 1;
     
     while (! exit_signal[0] ){
-        for (int request_id = thid(); !exit_signal[0] && request_id < requests_number[0]; 
+        for (int request_id = thid(); !exit_signal[0] && 
+                request_id < requests_number[0]; 
                 request_id += blockDim.x*gridDim.x){
-
             __threadfence();
             if (request_signal[request_id] == MOCK){
-                _request_processing(request_id, /*exit_signal,*/ request_signal, 
-                                    request_counter, request_ids,/* request_dest,*/
-                                    /*d_memory, request_mem_size,*/ lock);
+                debug("mm: signal %d\n", request_id);
+                _request_processing(request_id, request_signal, 
+                                    request_counter, request_ids, lock);
                 __threadfence();
                 debug("mm: request done %d\n", request_id);
             }
