@@ -63,14 +63,10 @@ void mono_mock_app(request_type type,
 __global__
 void mock_app(request_type type, 
               volatile int* exit_signal,
-              //volatile int** d_memory,
               volatile int* request_signal, 
-              //volatile int* request_mem_size,
               volatile int* request_id, 
-              //volatile int** request_dest, 
               volatile int* exit_counter, 
               volatile int* lock,
-              //int size_to_alloc,
               int iter_num
               ){
 
@@ -79,10 +75,7 @@ void mock_app(request_type type,
     for (int i=0; i<iter_num; ++i){
         __threadfence();
 
-        request(type, exit_signal, /*d_memory, &new_ptr,*/ 
-                request_signal, /*request_mem_size, 
-                                  request_id,  request_dest, */
-                lock/*, size_to_alloc*/);
+        request(type, exit_signal, request_signal, lock);
 
         __threadfence();
     }
@@ -114,12 +107,11 @@ void start_application(request_type type,
     }else{
         //printf("start kernel\n");
         mock_app<<<grid_size, block_size>>>(type, exit_signal, 
-                /*requests.d_memory,*/
                 requests.request_signal, 
-                /*requests.request_mem_size, */
                 requests.request_id, 
-                /*requests.request_dest, */ exit_counter, 
-                requests.lock,/* size_to_alloc,*/ iter_num);
+                exit_counter, 
+                requests.lock,
+                iter_num);
     }
 
     //printf("kernel done, exit counter %d\n", exit_counter[0]);
@@ -245,8 +237,8 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
     createStreams(mm_stream, app_stream);
 
     //int block_size = 256;
-    int block_size = 1024;
-    int mul = 1;
+    int block_size = 1;
+    int mul = 16;
     std::cout << "#requests\t" << "#sm app\t\t" << "#sm mm\t\t" 
         << "#malloc and free per sec\n";
 
@@ -309,18 +301,10 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
                 *exit_counter = 0;
                 *mm_started = 0;
 
-                /*GUARD_CU((cudaError_t)cudaMemPrefetchAsync(exit_signal, sizeof(volatile int), device, NULL));
-                GUARD_CU((cudaError_t)cudaMemPrefetchAsync(exit_counter, sizeof(uint32_t), device, NULL));
-                GUARD_CU((cudaError_t)cudaMemPrefetchAsync(mm_started, sizeof(uint32_t), device, NULL));
-
-                GUARD_CU(cudaDeviceSynchronize());
-                GUARD_CU(cudaPeekAtLastError());*/
-
                 RequestType requests;
                 requests.init(requests_num);
                 requests.memset();
 
-                //GUARD_CU((cudaError_t)cuCtxGetCurrent(&default_ctx));
                 debug("start threads\n");
 
                 // Run Memory Manager (Presistent kernel)

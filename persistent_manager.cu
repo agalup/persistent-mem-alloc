@@ -13,7 +13,7 @@
 using namespace std;
 
 extern "C" {
-
+/*
 __device__
 void _request_processing(
         int request_id, 
@@ -33,7 +33,7 @@ void _request_processing(
     }
     release_semaphore((int*)(lock + request_id));
     // SEMAPHORE
-}
+}*/
 
 //producer
 __global__
@@ -51,32 +51,17 @@ void mem_manager(volatile int* exit_signal,
         for (int request_id = thid(); !exit_signal[0] && 
                 request_id < requests_number[0]; 
                 request_id += blockDim.x*gridDim.x){
-            __threadfence();
-            if (request_signal[request_id] == MOCK){
-                debug("mm: signal %d\n", request_id);
-                _request_processing(request_id, request_signal, 
-                                    request_counter, request_ids, lock);
-                __threadfence();
-                debug("mm: request done %d\n", request_id);
-            }
+            printf("memory manager: request id %d\n", request_id);
         }
         __threadfence();
     }
 }
-
+/*
 __device__
 void post_request(request_type type,
-                  //volatile int** dest,
                   volatile int* lock,
-                  //volatile int* request_mem_size,
-                  //volatile int* request_id,
-                  volatile int* request_signal
-                  //,volatile int** request_dest,
-                  //volatile int* exit_signal,
-                  //int size_to_alloc
-                  ){
+                  volatile int* request_signal){
 
-    //int thid = blockDim.x * blockIdx.x + threadIdx.x;
     debug("request %d, block %d\n", thid(), blockIdx.x);
     
     __threadfence();
@@ -91,18 +76,12 @@ void post_request(request_type type,
 
     __threadfence();
     // SEMAPHORE
-}
-
+}*/
+/*
 __device__
 void request_processed(request_type type,
                       volatile int* lock,
-                      /*volatile int* request_id,
-                      volatile int* exit_signal,
-                      volatile int** d_memory,
-                      volatile int** dest,*/
-                      volatile int* request_signal
-                      /*,volatile int** request_dest*/){
-                      //int& req_id){
+                      volatile int* request_signal){
     //int thid = blockDim.x * blockIdx.x + threadIdx.x;
     // SEMAPHORE
     __threadfence();
@@ -124,90 +103,36 @@ void request_processed(request_type type,
     //debug("request %d, block %d done\n", thid(), blockIdx.x);
     __threadfence();
     // SEMAPHORE
-}
+}*/
 
 __device__
 void request(request_type type,
         volatile int* exit_signal,
-        //volatile int** d_memory,
-        //volatile int** dest,
         volatile int* request_signal,
-        //volatile int* request_mem_size, 
-        //volatile int* request_id,
-        //volatile int** request_dest,
         volatile int* lock
-        //, int size_to_alloc
         ){
 
     // POST REQUEST: wait for success
     while (!exit_signal[0]){
-        if (request_signal[thid()] == request_empty){
-            post_request(type, /*dest,*/ lock, /*request_mem_size, 
-                        request_id, */ request_signal /*,request_dest, 
-                        exit_signal, size_to_alloc*/);
-            break;
+        break;
+        /*if (request_signal[thid()] == request_empty){
+            //post_request(type, lock, request_signal);
         }
-        __threadfence();
+        __threadfence();*/
     }
-    ///__threadfence();
 
     // REQUEST PROCESSED
     // int it = 0;
     // wait for success
     while (!exit_signal[0]){
+        break;
+        /*
         if (request_signal[thid()] == request_done){
-            request_processed(type, lock,/* request_id, exit_signal, d_memory, 
-                        dest,*/ request_signal/*, request_dest*/);//, -1);
+            //request_processed(type, lock, request_signal);
             break;
         }
-        __threadfence();
+        __threadfence();*/
     }
 }
-
-
-/*
-void check_persistent_kernel_results(int* exit_signal, 
-                   int* exit_counter, 
-                   int block_size, 
-                   int app_grid_size, 
-                   RequestType& requests, 
-                   int requests_num,
-                   bool& finish){
-
-    // Check results
-    int old_counter = -1;
-    long long int iter = 0;
-    long long int time_limit = 1000000000;
-    //printf("waiting till allocations are done\n");
-    while (iter < time_limit){
-        std::this_thread::sleep_for(std::chrono::microseconds(1));
-        //if (iter%60 == 0)
-        //    printf("%lld min, exit counter %d\n", iter/60, exit_counter[0]);
-        // Check if all allocations are done
-        if (exit_counter[0] == block_size*app_grid_size){
-            GUARD_CU(cudaStreamSynchronize(0));
-            GUARD_CU(cudaPeekAtLastError());
-            finish = true;
-            break;
-        }else{
-            GUARD_CU(cudaPeekAtLastError());
-            if (exit_counter[0] != old_counter){
-                old_counter = exit_counter[0];
-                //printf("%d\n", old_counter);
-                iter = 0;
-            }
-            ++iter;
-        }
-        if (iter >= time_limit){
-            // Start mm and app again
-            printf("time limit exceed, break\n");
-            fflush(stdout);
-            *exit_signal = 1;
-            GUARD_CU(cudaDeviceSynchronize());
-            GUARD_CU(cudaPeekAtLastError());
-        }
-    }
-    GUARD_CU(cudaPeekAtLastError());
-}*/
 
 }
