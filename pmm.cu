@@ -224,8 +224,6 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
         int* sm_man, int* sm_gc, int* mock_requests, float* uni_req_per_sec, 
         int* array_size){
 
-    //auto instant_size = *ins_size;
-
     printf("mono : %d\n", mono);
    
     CUcontext default_ctx;
@@ -238,7 +236,7 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
 
     //int block_size = 256;
     int block_size = 1;
-    int mul = 16;
+    int mul = 17;
     std::cout << "#requests\t" << "#sm app\t\t" << "#sm mm\t\t" 
         << "#malloc and free per sec\n";
 
@@ -258,10 +256,10 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
 
         int it = 0;
 
-        //for (int app_sm_size = SMs - 1; app_sm_size > 0; --app_sm_size){
-        for (int app_sm_size = 1; app_sm_size < SMs; ++app_sm_size){
+        for (int app_sm_size = 2; app_sm_size < 3;/*SMs;*/ ++app_sm_size){
 
-            int mm_sm_size = SMs - app_sm_size;
+            //int mm_sm_size = SMs - app_sm_size;
+            int mm_sm_size = 2;
             int app_grid_size = mul * app_sm_size;
             int mm_grid_size = mul * mm_sm_size;
             int requests_num{app_grid_size*block_size};

@@ -51,7 +51,8 @@ void mem_manager(volatile int* exit_signal,
         for (int request_id = thid(); !exit_signal[0] && 
                 request_id < requests_number[0]; 
                 request_id += blockDim.x*gridDim.x){
-            printf("memory manager: request id %d\n", request_id);
+            if (request_id > 31)
+                printf("memory manager: request id %d/%d\n", request_id, requests_number[0]);
         }
         __threadfence();
     }
