@@ -23,15 +23,19 @@ void _request_processing(
         volatile int* lock){
 
     // SEMAPHORE
-    acquire_semaphore((int*)(lock + request_id));
-    if (request_signal[request_id] == MOCK){
+    acquire_semaphore(lock + request_id);
+    auto rs = request_signal[request_id];
+    if (rs == MOCK){
         if (request_ids[request_id] == -1){
             request_ids[request_id] = atomicAdd((int*)&request_counter[0], 1);
         }
+        //printf("request done %d\n", request_id);
         atomicExch((int*)&request_signal[request_id], DONE);
         __threadfence();
+    }else{
+        //printf("error: request_signal = %d\n", rs);
     }
-    release_semaphore((int*)(lock + request_id));
+    release_semaphore(lock + request_id);
     // SEMAPHORE
 }
 
@@ -44,20 +48,34 @@ void mem_manager(volatile int* exit_signal,
         volatile int* request_signal, 
         volatile int* request_ids, 
         volatile int* lock){
-
     mm_started[0] = 1;
-    
+        auto es = exit_signal[0];
+    //if (blockIdx.x > 30)
+        int first_comm = 1;
+        int second_comm = 1;
     while (! exit_signal[0] ){
+           // break;
         for (int request_id = thid(); !exit_signal[0] && 
                 request_id < requests_number[0]; 
                 request_id += blockDim.x*gridDim.x){
             __threadfence();
-            if (request_signal[request_id] == MOCK){
-                debug("mm: signal %d\n", request_id);
+            auto rs = request_signal[request_id];
+
+            if (first_comm){
+                printf("MEM MANAGER(before): blockIdx.x=%d/%d, exit_signal = %d, request_signal=%d, sm = %d, lane = %d, warp = %d\n", blockIdx.x, gridDim.x, es, rs, sm_id(), lane_id(), warp_id());
+                first_comm = 0;
+            }
+            if (rs == MOCK){
                 _request_processing(request_id, request_signal, 
                                     request_counter, request_ids, lock);
                 __threadfence();
                 debug("mm: request done %d\n", request_id);
+
+            if (second_comm){
+                printf("MEM MANAGER(after): blockIdx.x=%d/%d, exit_signal = %d, request_signal=%d, sm = %d, lane = %d, warp = %d\n", blockIdx.x, gridDim.x, es, rs, sm_id(), lane_id(), warp_id());
+                second_comm = 0;
+            }
+
             }
         }
         __threadfence();
@@ -66,28 +84,18 @@ void mem_manager(volatile int* exit_signal,
 
 __device__
 void post_request(request_type type,
-                  //volatile int** dest,
                   volatile int* lock,
-                  //volatile int* request_mem_size,
-                  //volatile int* request_id,
                   volatile int* request_signal
-                  //,volatile int** request_dest,
-                  //volatile int* exit_signal,
-                  //int size_to_alloc
                   ){
-
-    //int thid = blockDim.x * blockIdx.x + threadIdx.x;
-    debug("request %d, block %d\n", thid(), blockIdx.x);
+    //printf("request %d, block %d\n", thid(), blockIdx.x);
     
     __threadfence();
     // SEMAPHORE
-    //acquire_semaphore((int*)lock, thid());
-    //int* ptr = (int*)(lock + thid());
-    acquire_semaphore((int*)(lock + thid()));
+    acquire_semaphore(lock + thid());
     // SIGNAL update
+   // request_signal[thid()] = type;
     atomicExch((int*)&request_signal[thid()], type);
-    //release_semaphore((int*)lock, thid());
-    release_semaphore((int*)(lock + thid()));
+    release_semaphore(lock + thid());
 
     __threadfence();
     // SEMAPHORE
@@ -96,118 +104,52 @@ void post_request(request_type type,
 __device__
 void request_processed(request_type type,
                       volatile int* lock,
-                      /*volatile int* request_id,
-                      volatile int* exit_signal,
-                      volatile int** d_memory,
-                      volatile int** dest,*/
-                      volatile int* request_signal
-                      /*,volatile int** request_dest*/){
-                      //int& req_id){
-    //int thid = blockDim.x * blockIdx.x + threadIdx.x;
+                      volatile int* request_signal){
     // SEMAPHORE
     __threadfence();
-    //acquire_semaphore((int*)lock, thid());
-    //int* ptr = (int*)(lock + thid());
-    acquire_semaphore((int*)(lock + thid()));
-    switch (type){
-        case MOCK:
-            //req_id = request_id[thid()];
-            break;
-        default:
-            //printf("error\n");
-            break;
-    }
+    acquire_semaphore(lock + thid());
     // SIGNAL update
-    request_signal[thid()] = request_empty;
-    //release_semaphore((int*)lock, thid());
-    release_semaphore((int*)(lock + thid()));
-    //debug("request %d, block %d done\n", thid(), blockIdx.x);
-    __threadfence();
+    //request_signal[thid()] = request_empty;
+    atomicExch((int*)&request_signal[thid()], request_empty);
+    release_semaphore(lock + thid());
     // SEMAPHORE
 }
 
 __device__
 void request(request_type type,
         volatile int* exit_signal,
-        //volatile int** d_memory,
-        //volatile int** dest,
         volatile int* request_signal,
-        //volatile int* request_mem_size, 
-        //volatile int* request_id,
-        //volatile int** request_dest,
         volatile int* lock
-        //, int size_to_alloc
         ){
 
+    //printf("request %d\n", thid());
+    //debug("request %d\n", thid());
     // POST REQUEST: wait for success
     while (!exit_signal[0]){
+        //printf("%d/%d i am gonna post request\n", thid(), blockIdx.x);
         if (request_signal[thid()] == request_empty){
-            post_request(type, /*dest,*/ lock, /*request_mem_size, 
-                        request_id, */ request_signal /*,request_dest, 
-                        exit_signal, size_to_alloc*/);
+            //printf("post request %d\n", thid());
+            post_request(type, lock, request_signal);
             break;
         }
         __threadfence();
     }
-    ///__threadfence();
 
+    auto es = exit_signal[0];
+    printf("APP: blockIdx.x=%d/%d, exit_signal = %d, sm = %d, lane = %d, warp = %d\n", blockIdx.x, gridDim.x, es, sm_id(), lane_id(), warp_id());
+ 
+    //printf("%d/%d waiting to be done\n", thid(), blockIdx.x);
     // REQUEST PROCESSED
-    // int it = 0;
     // wait for success
     while (!exit_signal[0]){
-        if (request_signal[thid()] == request_done){
-            request_processed(type, lock,/* request_id, exit_signal, d_memory, 
-                        dest,*/ request_signal/*, request_dest*/);//, -1);
+        auto rs = request_signal[thid()];
+        if (rs == request_done){
+            //printf("request processed %d\n", thid());
+            request_processed(type, lock, request_signal);
             break;
         }
         __threadfence();
     }
 }
-
-
-/*
-void check_persistent_kernel_results(int* exit_signal, 
-                   int* exit_counter, 
-                   int block_size, 
-                   int app_grid_size, 
-                   RequestType& requests, 
-                   int requests_num,
-                   bool& finish){
-
-    // Check results
-    int old_counter = -1;
-    long long int iter = 0;
-    long long int time_limit = 1000000000;
-    //printf("waiting till allocations are done\n");
-    while (iter < time_limit){
-        std::this_thread::sleep_for(std::chrono::microseconds(1));
-        //if (iter%60 == 0)
-        //    printf("%lld min, exit counter %d\n", iter/60, exit_counter[0]);
-        // Check if all allocations are done
-        if (exit_counter[0] == block_size*app_grid_size){
-            GUARD_CU(cudaStreamSynchronize(0));
-            GUARD_CU(cudaPeekAtLastError());
-            finish = true;
-            break;
-        }else{
-            GUARD_CU(cudaPeekAtLastError());
-            if (exit_counter[0] != old_counter){
-                old_counter = exit_counter[0];
-                //printf("%d\n", old_counter);
-                iter = 0;
-            }
-            ++iter;
-        }
-        if (iter >= time_limit){
-            // Start mm and app again
-            printf("time limit exceed, break\n");
-            fflush(stdout);
-            *exit_signal = 1;
-            GUARD_CU(cudaDeviceSynchronize());
-            GUARD_CU(cudaPeekAtLastError());
-        }
-    }
-    GUARD_CU(cudaPeekAtLastError());
-}*/
 
 }

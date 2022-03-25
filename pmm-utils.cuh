@@ -172,10 +172,12 @@ void mem_test(int** d_memory0, int requests_num, int blocks, int threads){
     GUARD_CU(cudaPeekAtLastError());
 }*/
 
+#define thid() (blockIdx.x * blockDim.x + threadIdx.x)
+/*
 __device__
 inline int thid(){
     return blockIdx.x * blockDim.x + threadIdx.x;
-}
+}*/
 
 //__device__ void acquire_semaphore(volatile int* lock, int i){
 //    while (atomicCAS((int*)&lock[i], 0, 1) != 0){
@@ -185,21 +187,45 @@ inline int thid(){
 //}
 
 __device__ 
-void acquire_semaphore(int* lock){
-    while (atomicCAS(lock, 0, 1) != 0){
+void acquire_semaphore(volatile int* lock){
+    while (atomicCAS((int*)lock, 0, 1) != 0){
         //printf("acq semaphore: thread %d\n", threadIdx.x);
     }
     __threadfence();
 }
 
 __device__ 
-void release_semaphore(int* lock){
+void release_semaphore(volatile int* lock){
     __threadfence();
     *lock = 0;
+}
+
+__forceinline__ __device__ unsigned lane_id()
+{
+    unsigned ret; 
+    asm volatile ("mov.u32 %0, %laneid;" : "=r"(ret));
+    return ret;
+}
+
+__forceinline__ __device__ unsigned warp_id()
+{
+    // this is not equal to threadIdx.x / 32
+    unsigned ret; 
+    asm volatile ("mov.u32 %0, %warpid;" : "=r"(ret));
+    return ret;
+}
+
+__forceinline__ __device__ unsigned sm_id()
+{
+    unsigned ret;
+    asm volatile ("mov.u32 %0, %smid;" : "=r"(ret));
+    return ret;
+
 }
 //__device__ void release_semaphore(volatile int* lock, int i){
 //    __threadfence();
 //    lock[i] = 0;
 //}
+
 }
 #endif
