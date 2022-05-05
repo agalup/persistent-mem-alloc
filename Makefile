@@ -23,9 +23,9 @@ $(EXEC):
     --expt-relaxed-constexpr -I include -I Ouroboros_origin/include -DOUROBOROS__ main.cu \
     -lcuda -I SlabHash -I SlabHash/SlabAlloc/src -o ouroboros_mm
 	
-	nvcc -g -O3 -Xptxas -O3 -arch=sm_75 --resource-usage -Xptxas --warn-on-spills --maxrregcount 32 \
-    --expt-relaxed-constexpr -I include -I Ouroboros_origin/include -DOUROBOROS__ \
-    -lcuda -I SlabHash -I SlabHash/SlabAlloc/src \
-    --compiler-options '-fPIC' -Xcompiler --shared pmm.cu -o ouroboros_mm.so 
+#	nvcc -g -O3 -Xptxas -O3 -arch=sm_75 --resource-usage -Xptxas --warn-on-spills --maxrregcount 32 \
+#    --expt-relaxed-constexpr -I include -I Ouroboros_origin/include -DOUROBOROS__ \
+#    -lcuda -I SlabHash -I SlabHash/SlabAlloc/src \
+#    --compiler-options '-fPIC' -Xcompiler --shared pmm.cu -o ouroboros_mm.so 
  
    

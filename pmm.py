@@ -229,6 +229,9 @@ def main(argv):
     run_test(1, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
                 instant_size, int(iteration_num), int(kernel_iter_num))
 
+    run_test(2, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
+                instant_size, int(iteration_num), int(kernel_iter_num))
+
     #device.reset()
     
     #print("halloc test")

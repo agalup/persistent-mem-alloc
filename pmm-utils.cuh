@@ -46,6 +46,10 @@ extern "C"{
 #define FREE        5
 #define GC          7
 
+
+#define MPS_mono    1
+#define simple_mono 2
+
 enum request_type {
     request_empty       = EMPTY,
     request_done        = DONE,
