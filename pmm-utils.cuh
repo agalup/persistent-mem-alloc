@@ -8,6 +8,7 @@
 #include "PerformanceMeasure.cuh"
 #include "Utility.h"
 #include "cuda.h"
+#include "cuda_profiler_api.h"
 #include <algorithm>
 #include <iostream>
 #include <string>
@@ -19,7 +20,7 @@ using namespace std;
 
 extern "C"{
 
-//#define DEBUG
+#define DEBUG
 #ifdef DEBUG
 #define debug(a...) printf(a)
 #else
@@ -37,7 +38,7 @@ extern "C"{
 #endif
 #ifdef HALLOC__
     //Halloc initialization
-    #define MemoryManagerType MemoryManagerHalloc
+    #define MemoryManagerType MemoryManagerHallokldfsdfjkkj
 #endif
 
 #define EMPTY       0
@@ -211,6 +212,28 @@ __device__ void acquire_semaphore(volatile int* lock, int i){
 __device__ void release_semaphore(volatile int* lock, int i){
     __threadfence();
     lock[i] = 0;
+}
+
+__forceinline__ __device__ unsigned lane_id()
+{
+    unsigned ret; 
+    asm volatile ("mov.u32 %0, %laneid;" : "=r"(ret));
+    return ret;
+}
+
+__forceinline__ __device__ unsigned warp_id()
+{
+    // this is not equal to threadIdx.x / 32
+    unsigned ret; 
+    asm volatile ("mov.u32 %0, %warpid;" : "=r"(ret));
+    return ret;
+}
+
+__forceinline__ __device__ unsigned sm_id()
+{
+    unsigned ret;
+    asm volatile ("mov.u32 %0, %smid;" : "=r"(ret));
+    return ret;
 }
 
 //test
