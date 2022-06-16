@@ -20,7 +20,7 @@ using namespace std;
 
 extern "C"{
 
-#define DEBUG
+//#define DEBUG
 #ifdef DEBUG
 #define debug(a...) printf(a)
 #else
