@@ -46,15 +46,26 @@ void mem_manager(volatile int* exit_signal,
         volatile int* lock){
 
     mm_started[0] = 1;
-    
+    uint32_t ret;
+    asm("mov.u32 %0, %smid;" : "=r"(ret));
+    auto es = exit_signal[0];
+    if (blockIdx.x > 30)
+        printf("1: memory manager: block id %d/%d, smid %d, exit_signal = %d\n", blockIdx.x, gridDim.x, ret, es);
+
     while (! exit_signal[0] ){
+        asm("mov.u32 %0, %smid;" : "=r"(ret));
+        if (blockIdx.x > 30)
+            printf("2: memory manager: block id %d/%d, smid %d\n", blockIdx.x, gridDim.x, ret);
         for (int request_id = thid(); !exit_signal[0] && 
                 request_id < requests_number[0]; 
                 request_id += blockDim.x*gridDim.x){
-            if (request_id > 31)
-                printf("memory manager: request id %d/%d\n", request_id, requests_number[0]);
+                uint32_t ret;
+                asm("mov.u32 %0, %smid;" : "=r"(ret));
+                if (blockIdx.x > 30)
+                    printf("3: memory manager: request id %d/%d, smid %d\n", request_id, requests_number[0], ret);
         }
         __threadfence();
+        break;
     }
 }
 /*
@@ -115,6 +126,11 @@ void request(request_type type,
 
     // POST REQUEST: wait for success
     while (!exit_signal[0]){
+        uint32_t ret;
+        if (thid() > 30){
+            asm("mov.u32 %0, %smid;" : "=r"(ret));
+            printf("requested by %d/%d, smid %d\n", thid(), blockDim.x*gridDim.x, ret);
+        }
         break;
         /*if (request_signal[thid()] == request_empty){
             //post_request(type, lock, request_signal);

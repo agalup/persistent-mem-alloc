@@ -241,16 +241,20 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
         << "#malloc and free per sec\n";
 
     if (mono){
-        mono_version(mono, kernel_iteration_num, size_to_alloc, ins_size, num_iterations,
-                SMs, sm_app, sm_man, sm_gc, mock_requests, uni_req_per_sec, array_size, 
-                block_size);
-
+        mono_version(mono, kernel_iteration_num, size_to_alloc, ins_size, 
+                num_iterations, SMs, sm_app, sm_man, sm_gc, mock_requests, 
+                uni_req_per_sec, array_size, block_size);
     }else{
         printf("not mono\n");
 
-        volatile int* exit_signal;   allocManaged(&exit_signal, sizeof(uint32_t));
-        volatile int* exit_counter;  allocManaged(&exit_counter, sizeof(uint32_t));
-        volatile int* mm_started;    allocManaged(&mm_started, sizeof(uint32_t));
+        volatile int* exit_signal;   
+        volatile int* exit_counter;  
+        volatile int* mm_started;    
+
+        allocManaged(&exit_signal, sizeof(uint32_t));
+        allocManaged(&exit_counter, sizeof(uint32_t));
+        allocManaged(&mm_started, sizeof(uint32_t));
+
         GUARD_CU(cudaDeviceSynchronize());
         GUARD_CU(cudaPeekAtLastError());
 
@@ -347,7 +351,7 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
                 app_thread.join();
                 debug("app joined\n");
 
-                *exit_signal = 1;
+                //*exit_signal = 1;
 
                 debug("join mm\n");
                 mm_thread.join();
