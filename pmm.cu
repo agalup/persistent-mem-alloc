@@ -308,25 +308,26 @@ void request(request_type type,
 __global__
 void mono_app_test(//volatile int* exit_signal,
         volatile int** d_memory, 
+        //RequestType& requests, 
         //volatile int* request_signal, 
         //volatile int* request_mem_size,
         //volatile int* request_id, 
         //volatile int** request_dest, 
         volatile int* exit_counter, 
         //volatile int* lock,
-        int size_to_alloc,
-        int iter_num,
+        int* size_to_alloc,
+        int* iter_num,
         //int MONO,
         MemoryManagerType* mm){
 
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
 
-    for (int i=0; i<iter_num; ++i){
+    for (int i=0; i<iter_num[0]; ++i){
         __threadfence();
 
         volatile int* new_ptr = NULL;
 
-        d_memory[thid] = reinterpret_cast<volatile int*>(mm->malloc(4+size_to_alloc)); 
+        d_memory[thid] = reinterpret_cast<volatile int*>(mm->malloc(4+size_to_alloc[0])); 
         d_memory[thid][0] = 0;
         new_ptr = &d_memory[thid][1];
         new_ptr[0] = thid;
@@ -364,21 +365,21 @@ void app_test(volatile int* exit_signal,
         volatile int** request_dest, 
         volatile int* exit_counter, 
         volatile int* lock,
-        int size_to_alloc,
-        int iter_num,
+        int* size_to_alloc,
+        int* iter_num,
         int MONO,
         MemoryManagerType* mm){
 
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
 
-    for (int i=0; i<iter_num; ++i){
+    for (int i=0; i<iter_num[0]; ++i){
         __threadfence();
 
         volatile int* new_ptr = NULL;
 
         request((request_type)MALLOC, exit_signal, d_memory, &new_ptr, 
                 request_signal, request_mem_size, request_id, request_dest,
-                lock, size_to_alloc);
+                lock, size_to_alloc[0]);
         new_ptr[0] = thid;
 
         __threadfence();
@@ -392,7 +393,7 @@ void app_test(volatile int* exit_signal,
 
         request((request_type)FREE, exit_signal, d_memory, &new_ptr,
                 request_signal, request_mem_size, request_id, request_dest,
-                lock, size_to_alloc);
+                lock, size_to_alloc[0]);
 
         __threadfence();
     }
@@ -483,7 +484,6 @@ void allocManaged(volatile int** ptr, size_t size){
     GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaDeviceSynchronize());
 }
-
 void start_memory_manager(PerfMeasure& timing_mm, 
                           uint32_t mm_grid_size,
                           uint32_t block_size, 
@@ -581,36 +581,47 @@ void start_application(int type,
                        volatile int* exit_signal,
                        RequestType& requests,
                        volatile int* exit_counter,
-                       int size_to_alloc, 
-                       int iter_num,
+                       int* dev_size_to_alloc, 
+                       int* dev_iter_num,
                        int mono, 
                        bool& kernel_complete,
                        MemoryManagerType& memory_manager){
     if (mono == MPS_mono){
+        printf("start application: MPS mono!\n");
+        /*int* dev_size_to_alloc, *dev_iter_num;
+        GUARD_CU(cudaMalloc((void**)&dev_size_to_alloc, sizeof(int)));
+        GUARD_CU(cudaMalloc((void**)&dev_iter_num, sizeof(int)));
+        GUARD_CU(cudaMemset(dev_size_to_alloc, size_to_alloc, sizeof(int)));
+        GUARD_CU(cudaMemset(dev_iter_num, iter_num, sizeof(int)));*/
+        auto dev_mm = memory_manager.getDeviceMemoryManager();
+        void* args[] = {&requests.d_memory, &exit_counter, &dev_size_to_alloc, &dev_iter_num, &dev_mm};
+
         GUARD_CU(cudaProfilerStart());
         timing_sync.startMeasurement();
+        GUARD_CU(cudaLaunchKernel((void*)mono_app_test, dim3(grid_size, 1, 1), dim3(block_size, 1, 1), args, 0, 0));
+        /*
         mono_app_test<<<grid_size, block_size>>>(
             requests.d_memory, exit_counter, size_to_alloc, iter_num, 
             memory_manager.getDeviceMemoryManager());
+        */
         GUARD_CU((cudaError_t)cuCtxSynchronize());
         GUARD_CU(cudaPeekAtLastError());
         timing_sync.stopMeasurement();
         GUARD_CU(cudaProfilerStop());
     }else{
+        auto dev_mm = memory_manager.getDeviceMemoryManager();
+        void* args[] = {&exit_signal, &requests, &exit_counter, &dev_size_to_alloc, 
+                        &dev_iter_num, &mono, &dev_mm};
+
         GUARD_CU(cudaProfilerStart());
         timing_sync.startMeasurement();
-        /*void *kernelArgs[] = {(void*)exit_signal, (void*)requests.d_memory, 
-            (void*)requests.request_signal, (void*)requests.request_mem_size, 
-            (void*)requests.request_id, (void*)requests.request_dest, (void*)exit_counter, 
-            (void*)requests.lock, &size_to_alloc, &iter_num, &mono, 
-            (void*)memory_manager.getDeviceMemoryManager()};
+        GUARD_CU(cudaLaunchKernel((void*)app_test, dim3(grid_size, 1, 1), dim3(block_size, 1, 1), args, 0, 0));
 
-        GUARD_CU(cudaLaunchKernel((void*)app_test, grid_size, block_size, kernelArgs));*/
         //GUARD_CU(cudaLaunchCooperativeKernel((void*)app_test, grid_size, block_size, kernelArgs));
-        app_test<<<grid_size, block_size>>>(exit_signal, requests.d_memory, 
+        /*app_test<<<grid_size, block_size>>>(exit_signal, requests.d_memory, 
             requests.request_signal, requests.request_mem_size, requests.request_id, 
-            requests.request_dest, exit_counter, requests.lock, size_to_alloc, iter_num, mono, 
-            memory_manager.getDeviceMemoryManager());
+            requests.request_dest, exit_counter, requests.lock, dev_size_to_alloc, dev_iter_num, mono, 
+            memory_manager.getDeviceMemoryManager());*/
         GUARD_CU((cudaError_t)cuCtxSynchronize());
         GUARD_CU(cudaPeekAtLastError());
         timing_sync.stopMeasurement();
@@ -670,8 +681,22 @@ void simple_monolithic_app(int mono, int kernel_iteration_num, int size_to_alloc
     volatile int* exit_counter;
     allocManaged(&exit_counter, sizeof(uint32_t));
 
-    int block_size = 1024;
+    int* dev_size_to_alloc;
+    int* dev_kernel_iteration_num;
+    GUARD_CU(cudaMallocManaged(&dev_size_to_alloc, sizeof(int)));
+    GUARD_CU(cudaMallocManaged(&dev_kernel_iteration_num, sizeof(int)));
+    GUARD_CU(cudaPeekAtLastError());
+    GUARD_CU(cudaDeviceSynchronize());
+   
+    *dev_size_to_alloc = size_to_alloc;
+    *dev_kernel_iteration_num = kernel_iteration_num;
+    
+    CUdevice device;
+    GUARD_CU((cudaError_t)cuDeviceGet(&device, 0));
+    GUARD_CU((cudaError_t)cudaMemPrefetchAsync((int*)dev_size_to_alloc, sizeof(int), device, NULL));
+    GUARD_CU((cudaError_t)cudaMemPrefetchAsync((int*)dev_kernel_iteration_num, sizeof(int), device, NULL));
 
+    int block_size = 1024;
     int app_grid_size = SMs;
     int requests_num = app_grid_size * block_size;
     
@@ -692,7 +717,7 @@ void simple_monolithic_app(int mono, int kernel_iteration_num, int size_to_alloc
         GUARD_CU(cudaPeekAtLastError());
         malloc_total_sync.startMeasurement();
         mono_app_test<<<app_grid_size, block_size, 0, app_stream>>>(d_memory, 
-                                exit_counter, size_to_alloc, kernel_iteration_num, 
+                                exit_counter, dev_size_to_alloc, dev_kernel_iteration_num, 
                                 memory_manager.getDeviceMemoryManager());
         GUARD_CU(cudaDeviceSynchronize());
         GUARD_CU((cudaError_t)cuCtxSynchronize());
@@ -747,6 +772,24 @@ void mps_monolithic_app(int mono, int kernel_iteration_num, int size_to_alloc,
     volatile int* exit_counter;
     allocManaged(&exit_counter, sizeof(uint32_t));
 
+    CUcontext app_ctx;
+    CUdevice device;
+    GUARD_CU((cudaError_t)cuDeviceGet(&device, 0));
+    GUARD_CU((cudaError_t)cuCtxCreate(&app_ctx, 0, device));
+
+    int* dev_size_to_alloc;
+    int* dev_kernel_iteration_num;
+    GUARD_CU(cudaMallocManaged(&dev_size_to_alloc, sizeof(int)));
+    GUARD_CU(cudaMallocManaged(&dev_kernel_iteration_num, sizeof(int)));
+    GUARD_CU(cudaPeekAtLastError());
+    GUARD_CU(cudaDeviceSynchronize());
+   
+    *dev_size_to_alloc = size_to_alloc;
+    *dev_kernel_iteration_num = kernel_iteration_num;
+    
+    GUARD_CU((cudaError_t)cudaMemPrefetchAsync((int*)dev_size_to_alloc, sizeof(int), device, NULL));
+    GUARD_CU((cudaError_t)cudaMemPrefetchAsync((int*)dev_kernel_iteration_num, sizeof(int), device, NULL));
+
     int app_grid_size = SMs;
     int block_size = 1024;
     int requests_num = app_grid_size * block_size;
@@ -754,11 +797,6 @@ void mps_monolithic_app(int mono, int kernel_iteration_num, int size_to_alloc,
     sm_mm[0] = 0;
     sm_gc[0] = 0;
     allocs[0] = requests_num;
-
-    CUcontext app_ctx;
-    CUdevice device;
-    GUARD_CU((cudaError_t)cuDeviceGet(&device, 0));
-    GUARD_CU((cudaError_t)cuCtxCreate(&app_ctx, 0, device));
 
     PerfMeasure /*timing_malloc_app, */malloc_total_sync;
 
@@ -787,8 +825,8 @@ void mps_monolithic_app(int mono, int kernel_iteration_num, int size_to_alloc,
             //malloc_total_sync.startMeasurement();
             start_application(MALLOC, malloc_total_sync, 
                     app_grid_size, block_size, app_ctx, exit_signal,
-                    requests, exit_counter, size_to_alloc, 
-                    kernel_iteration_num, mono, kernel_complete, memory_manager);
+                    requests, exit_counter, dev_size_to_alloc, 
+                    dev_kernel_iteration_num, mono, kernel_complete, memory_manager);
             debug("app done, sync\n");
             GUARD_CU((cudaError_t)cuCtxSynchronize());
             //malloc_total_sync.stopMeasurement();
@@ -851,6 +889,9 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc, size_t* ins_
 #endif
 #endif
 
+    CUdevice device;
+    GUARD_CU((cudaError_t)cuDeviceGet(&device, 0));
+
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
     //Creat two asynchronous streams which may run concurrently with the default stream 0.
@@ -862,6 +903,19 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc, size_t* ins_
     volatile int* exit_counter; allocManaged(&exit_counter, sizeof(uint32_t));
     volatile int* gc_started;   allocManaged(&gc_started, sizeof(uint32_t));
     volatile int* mm_started;   allocManaged(&mm_started, sizeof(uint32_t));
+
+    int* dev_size_to_alloc;
+    int* dev_kernel_iteration_num;
+    GUARD_CU(cudaMallocManaged(&dev_size_to_alloc, sizeof(int)));
+    GUARD_CU(cudaMallocManaged(&dev_kernel_iteration_num, sizeof(int)));
+    GUARD_CU(cudaPeekAtLastError());
+    GUARD_CU(cudaDeviceSynchronize());
+   
+    *dev_size_to_alloc = size_to_alloc;
+    *dev_kernel_iteration_num = kernel_iteration_num;
+    
+    GUARD_CU((cudaError_t)cudaMemPrefetchAsync((int*)dev_size_to_alloc, sizeof(int), device, NULL));
+    GUARD_CU((cudaError_t)cudaMemPrefetchAsync((int*)dev_kernel_iteration_num,sizeof(int), device, NULL));
 
     int it = 0;
 
@@ -920,8 +974,7 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc, size_t* ins_
             //auto affinity_flags = CUctx_flags::CU_CTX_LMEM_RESIZE_TO_MAX;
 
             CUcontext app_ctx, mm_ctx, gc_ctx;
-            CUdevice device;
-            GUARD_CU((cudaError_t)cuDeviceGet(&device, 0));
+   
             GUARD_CU((cudaError_t)cuCtxCreate_v3(&app_ctx, &app_param, 1, affinity_flags, device));
             GUARD_CU((cudaError_t)cuCtxCreate_v3(&mm_ctx, &mm_param, 1, affinity_flags, device));
             GUARD_CU((cudaError_t)cuCtxCreate_v3(&gc_ctx, &gc_param, 1, affinity_flags, device));
@@ -1002,8 +1055,8 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc, size_t* ins_
                     //malloc_total_sync.startMeasurement();
                     start_application(MALLOC, /*timing_malloc_app, */malloc_total_sync, 
                             mul*app_grid_size, block_size, app_ctx, exit_signal,
-                            requests, exit_counter, size_to_alloc, 
-                            kernel_iteration_num, mono, kernel_complete, memory_manager);
+                            requests, exit_counter, dev_size_to_alloc, 
+                            dev_kernel_iteration_num, mono, kernel_complete, memory_manager);
                     GUARD_CU((cudaError_t)cuCtxSynchronize());
                     //malloc_total_sync.stopMeasurement();
                     GUARD_CU(cudaPeekAtLastError());
