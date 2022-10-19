@@ -21,6 +21,7 @@ using namespace std;
 extern "C"{
 
 //#define DEBUG
+
 #ifdef DEBUG
 #define debug(a...) printf(a)
 #else
@@ -92,48 +93,21 @@ struct RequestType{
     void init(size_t Size);
     void memset();
     void free();
-
-    // SlabHashTable
-    //gpu_hash_table<uint32_t, uint32_t, SlabHashTypeT::ConcurrentMap>* hash_table;
-
 };
 
 void RequestType::init(size_t Size){
-
     size = Size;
-
     GUARD_CU(cudaMallocManaged(&requests_number,         sizeof(volatile int)));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaMallocManaged(&request_counter,         sizeof(volatile int)));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaMallocManaged(&request_signal,   size * sizeof(volatile int)));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaMallocManaged(&request_id,       size * sizeof(volatile int)));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaMallocManaged(&request_mem_size, size * sizeof(volatile int)));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaMallocManaged(&lock,             size * sizeof(volatile int)));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaMallocManaged(&d_memory,         size * sizeof(volatile int*)));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaMallocManaged(&request_dest,     size * sizeof(volatile int*)));
-    GUARD_CU(cudaPeekAtLastError());
 
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
-
-    /*
-    uint32_t num_keys = 1<<20;
-    float expected_chain = 0.6f;
-    uint32_t num_elements_per_uint = 15;
-    uint32_t expected_elements_per_bucket = expected_chain * num_elements_per_uint;
-    uint32_t num_buckets = (num_keys + expected_elements_per_bucket - 1)/expected_elements_per_bucket;
-    const int64_t seed = 1;
-    uint32_t DEVICE_ID = 0;
-    hash_table = 
-        new gpu_hash_table<uint32_t, uint32_t, SlabHashTypeT::ConcurrentMap>(num_keys, num_buckets, DEVICE_ID, seed);
-    */
-
 }
 
 void RequestType::free(){
@@ -141,23 +115,13 @@ void RequestType::free(){
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaFree((void*)requests_number));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaFree((void*)request_counter));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaFree((void*)request_signal));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaFree((void*)request_id));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaFree((void*)request_mem_size));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaFree((void*)lock));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaFree((void*)d_memory));
-    GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaFree((void*)request_dest));
-    GUARD_CU(cudaPeekAtLastError());
-
-    //delete(hash_table);
 
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
@@ -166,20 +130,15 @@ void RequestType::free(){
 void RequestType::memset(){
 
     *requests_number = size;
-
     *request_counter = 0;
-
-    GUARD_CU(cudaMemset((void*)request_signal, 0,   size * sizeof(volatile int)));
-    GUARD_CU(cudaMemset((void*)request_id, -1,      size * sizeof(volatile int)));
-    GUARD_CU(cudaMemset((void*)request_mem_size, 0, size * sizeof(volatile int)));
-    GUARD_CU(cudaMemset((void*)lock, 0,             size * sizeof(volatile int)));
-    //GUARD_CU(cudaMemset((int**)d_memory, NULL,      size * sizeof(volatile int*)));
-    //GUARD_CU(cudaMemset((int**)request_dest, NULL,  size * sizeof(volatile int*)));
-
+    GUARD_CU(cudaMemset((void*)request_signal, 0,        size * sizeof(volatile int)));
+    GUARD_CU(cudaMemset((void*)request_id, -1,           size * sizeof(volatile int)));
+    GUARD_CU(cudaMemset((void*)request_mem_size, 0,      size * sizeof(volatile int)));
+    GUARD_CU(cudaMemset((void*)lock, 0,                  size * sizeof(volatile int)));
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
+    
 }
-
 
 __global__
 void copy(int** d_memory0, int* d_memory, int size){
