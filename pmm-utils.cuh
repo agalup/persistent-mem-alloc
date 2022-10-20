@@ -97,14 +97,14 @@ struct RequestType{
 
 void RequestType::init(size_t Size){
     size = Size;
-    GUARD_CU(cudaMallocManaged(&requests_number,         sizeof(volatile int)));
-    GUARD_CU(cudaMallocManaged(&request_counter,         sizeof(volatile int)));
-    GUARD_CU(cudaMallocManaged(&request_signal,   size * sizeof(volatile int)));
-    GUARD_CU(cudaMallocManaged(&request_id,       size * sizeof(volatile int)));
+    GUARD_CU(cudaMallocManaged(&requests_number, sizeof(volatile int)));
+    GUARD_CU(cudaMallocManaged(&request_counter, sizeof(volatile int)));
+    GUARD_CU(cudaMallocManaged(&request_signal, size * sizeof(volatile int)));
+    GUARD_CU(cudaMallocManaged(&request_id, size * sizeof(volatile int)));
     GUARD_CU(cudaMallocManaged(&request_mem_size, size * sizeof(volatile int)));
-    GUARD_CU(cudaMallocManaged(&lock,             size * sizeof(volatile int)));
-    GUARD_CU(cudaMallocManaged(&d_memory,         size * sizeof(volatile int*)));
-    GUARD_CU(cudaMallocManaged(&request_dest,     size * sizeof(volatile int*)));
+    GUARD_CU(cudaMallocManaged(&lock, size * sizeof(volatile int)));
+    GUARD_CU(cudaMallocManaged(&d_memory, size * sizeof(volatile int*)));
+    GUARD_CU(cudaMallocManaged(&request_dest, size * sizeof(volatile int*)));
 
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
@@ -131,10 +131,10 @@ void RequestType::memset(){
 
     *requests_number = size;
     *request_counter = 0;
-    GUARD_CU(cudaMemset((void*)request_signal, 0,        size * sizeof(volatile int)));
-    GUARD_CU(cudaMemset((void*)request_id, -1,           size * sizeof(volatile int)));
-    GUARD_CU(cudaMemset((void*)request_mem_size, 0,      size * sizeof(volatile int)));
-    GUARD_CU(cudaMemset((void*)lock, 0,                  size * sizeof(volatile int)));
+    GUARD_CU(cudaMemset((void*)request_signal, 0, size * sizeof(volatile int)));
+    GUARD_CU(cudaMemset((void*)request_id, -1, size * sizeof(volatile int)));
+    GUARD_CU(cudaMemset((void*)request_mem_size, 0, size * sizeof(volatile int)));
+    GUARD_CU(cudaMemset((void*)lock, 0, size * sizeof(volatile int)));
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
     
