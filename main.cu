@@ -6,6 +6,7 @@ using namespace std;
 
 int main(int argc, char *argv[]){
 
+
     //size_t instant_size = 8 * 1024ULL * 1024ULL * 1024ULL;
     size_t instant_size = 7 * 1024ULL * 1024ULL * 1024ULL;
     int size_to_alloc = 32;
@@ -29,9 +30,9 @@ int main(int argc, char *argv[]){
         instant_size = atoi(argv[5]);
     }
     
-    printf("size to alloc %d, iteration num %d, kernel iteration num %d, \
-instant size %ld\n", 
-            size_to_alloc, iteration_num, kernel_iter_num, instant_size);
+    printf("./a.out <B to alloc> <#iters> <#kernel_inner_iters> <mono?> <instant_size>\n");
+    printf("./a.out       %d        %d             %d           %d       %ld\n", 
+            size_to_alloc, iteration_num, kernel_iter_num, mono, instant_size);
 
     cudaDeviceProp deviceProp;
     GUARD_CU(cudaGetDeviceProperties(&deviceProp, 0));
