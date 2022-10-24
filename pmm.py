@@ -18,25 +18,24 @@ import plotly
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-
+from numpy import arange
 from pylab import *
-
 from numba import cuda as cu
 
-def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num, iteration_num, 
-               SMs, allocs_size, sm_app, sm_mm, sm_gc, uni_req_num, array_size):
+def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num, 
+                iteration_num, SMs, allocs_size, sm_app, sm_mm, sm_gc, 
+                uni_req_num, array_size):
 
     print("results size ", array_size[0])
-
     size = array_size[0]
 
-    from numpy import arange
-
     mono = ""
-    if MONO:
+    if MONO == 0:
         mono = "monolithic"
-    else:
-        mono = "mps"
+    elif MONO == 1:
+        mono = "simple_mono"
+    elif MONO == 2:
+        mono = "mps_services"
 
     pltname = mono + str(testcase) + "_" + str(SMs) + "SMs_" + \
     str(kernel_iter_num) + "_" + str(iteration_num) + "_" + \
@@ -112,8 +111,6 @@ def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num, iteration
 
     plt.suptitle(str(testcase))
 
-    
-
     ii = -135
     jj = -35.265
     ax.view_init(azim=ii, elev=jj)
@@ -129,11 +126,9 @@ def run_test(MONO, testcase, alloc_per_thread, device, pmm_init,
             #perf_alloc, 
             instant_size, iteration_num, kernel_iter_num):
 
-
     print("instant_size = ", instant_size)
     SMs = getattr(device, 'MULTIPROCESSOR_COUNT')
     size = SMs*SMs*SMs#SMs - 1;
-   
     plt.figure(figsize=(30,15))
 
     #use malloc:
@@ -147,11 +142,11 @@ def run_test(MONO, testcase, alloc_per_thread, device, pmm_init,
     uni_req_num     = pointer((c_float * size)())
 
     print("pmm_init, use malloc")
-    pmm_init(MONO, kernel_iter_num, alloc_per_thread, instant_size, iteration_num, 
-             SMs, sm_app, sm_mm, sm_gc, requests_num, uni_req_num, array_size);
+    pmm_init(MONO, kernel_iter_num, alloc_per_thread, instant_size, 
+            iteration_num, SMs, sm_app, sm_mm, sm_gc, requests_num, 
+            uni_req_num, array_size);
 
     #device.reset()
-
     #print("perf_alloc, use malloc")
     #perf_alloc(alloc_per_thread, instant_size, iteration_num, SMs, 
     #           app_sync, uni_req_num, use_malloc)
@@ -162,7 +157,6 @@ def run_test(MONO, testcase, alloc_per_thread, device, pmm_init,
                 sm_gc, uni_req_num, array_size)
   
     #device.reset()
-    #
     #instant_size0    = pointer((c_size_t)(instant_size))
     #sm_app0          = pointer((c_int * size)())
     #sm_mm0           = pointer((c_int * size)())

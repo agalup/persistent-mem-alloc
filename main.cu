@@ -53,8 +53,9 @@ int main(int argc, char *argv[]){
     //float* app_sync        = (float*)malloc(sizeof(float)*size);
     //float* uni_req_num     = (float*)malloc(sizeof(float)*size);
     
-    pmm_init(mono, kernel_iter_num, size_to_alloc, &instant_size, iteration_num, SMs, 
-            sm_app, sm_mm, sm_gc, allocs_size, uni_req_per_sec, array_size);
+    pmm_init(mono, kernel_iter_num, size_to_alloc, &instant_size, 
+            iteration_num, SMs, sm_app, sm_mm, sm_gc, allocs_size, 
+            uni_req_per_sec, array_size);
 
     GUARD_CU(cudaDeviceReset());
     GUARD_CU(cudaPeekAtLastError());
