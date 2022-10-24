@@ -31,16 +31,17 @@ def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num,
 
     mono = ""
     if MONO == 0:
-        mono = "monolithic"
+        mono = "mps_services" #"monolithic"
     elif MONO == 1:
-        mono = "simple_mono"
+        mono = "MPS_monolithic" #"simple_mono"
     elif MONO == 2:
-        mono = "mps_services"
+        mono = "monolithic" #"mps_services"
+    elif MONO == 3:
+        mono = "one_per_warp"
 
     pltname = mono + str(testcase) + "_" + str(SMs) + "SMs_" + \
     str(kernel_iter_num) + "_" + str(iteration_num) + "_" + \
     str(size)
-
 
     sm_app_list = [sm_app[0][i] for i in range(size)]
     sm_mm_list  = [ sm_mm[0][i] for i in range(size)]
@@ -226,6 +227,9 @@ def main(argv):
     run_test(2, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
                 instant_size, int(iteration_num), int(kernel_iter_num))
 
+    run_test(3, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
+                instant_size, int(iteration_num), int(kernel_iter_num))
+
     #device.reset()
     
     #print("halloc test")
@@ -236,3 +240,4 @@ def main(argv):
 
 if __name__ == "__main__":
     main(sys.argv[1:])
+
