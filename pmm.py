@@ -212,20 +212,18 @@ def main(argv):
     if len(argv) > 2:
         kernel_iter_num = argv[2]
 
-    print("alloc_per_thread {} iteration_num {} iteration_per_kernel {} instant_size {}".format(alloc_per_thread,
-    iteration_num, kernel_iter_num, instant_size))
+    print("alloc_per_thread {} iteration_num {} iteration_per_kernel {} instant_size {}".format(alloc_per_thread, iteration_num, kernel_iter_num, instant_size))
     
     print("ouroboros test")
     pmm_init = ouroboros.pmm_init
-    #perf_alloc = ouroboros.perf_alloc
-    run_test(0, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
-                instant_size, int(iteration_num), int(kernel_iter_num))
-
-    run_test(1, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
-                instant_size, int(iteration_num), int(kernel_iter_num))
-
-    run_test(2, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
-                instant_size, int(iteration_num), int(kernel_iter_num))
+#    run_test(0, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
+#                instant_size, int(iteration_num), int(kernel_iter_num))
+#
+#    run_test(1, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
+#                instant_size, int(iteration_num), int(kernel_iter_num))
+#
+#    run_test(2, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
+#                instant_size, int(iteration_num), int(kernel_iter_num))
 
     run_test(3, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
                 instant_size, int(iteration_num), int(kernel_iter_num))

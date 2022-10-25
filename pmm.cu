@@ -333,7 +333,9 @@ void app_one_per_warp_test(volatile int* exit_signal,
         }
         __threadfence();
         __syncthreads();
-        new_ptr = reinterpret_cast<int*>(reinterpret_cast<char*>(ptr_tab[threadIdx.x/32]) + (threadIdx.x%32)*size_to_alloc[0]);
+        int base = (threadIdx.x/32);
+        int offset = (threadIdx.x%32) * size_to_alloc[0];
+        new_ptr = reinterpret_cast<int*>(reinterpret_cast<char*>(ptr_tab[base]) + offset);
         __syncthreads();
         __threadfence();
         new_ptr[0] = thid;
@@ -573,7 +575,6 @@ void start_application(int type,
         timing_sync.stopMeasurement();
         //GUARD_CU(cudaProfilerStop());
     }
-
     kernel_complete = true;
 }
 
@@ -772,6 +773,8 @@ void mps_monolithic_app(int mono, int kernel_iteration_num, int size_to_alloc,
             //GUARD_CU((cudaError_t)cuCtxSynchronize());
             debug("start app\n");
             //malloc_total_sync.startMeasurement();
+
+            //mps_monolithic_app
             start_application(MALLOC, malloc_total_sync, 
                     app_grid_size, block_size, app_ctx, exit_signal,
                     requests, exit_counter, dev_size_to_alloc, 
@@ -878,19 +881,19 @@ void mps_app_one_per_warp(int mono, int kernel_iteration_num, int size_to_alloc,
 //    int block_size = 256;
     //SMs -= 10;
 
-    int app_grid_size = 22;
-    int mm_grid_size  = 6;
+//    int app_grid_size = 22;
+//    int mm_grid_size  = 6;
 
-//    for (int app_grid_size=1; app_grid_size<SMs; ++app_grid_size){
-//        //for (int app_grid_size=27; app_grid_size<28; ++app_grid_size){
-//    //for (int app_grid_size=1; app_grid_size<2; ++app_grid_size){
-//        for (int mm_grid_size=1; mm_grid_size<(SMs-app_grid_size); ++mm_grid_size){
-//            //for (int mm_grid_size=8; mm_grid_size<9; ++mm_grid_size){
-//        //for (int mm_grid_size=1; mm_grid_size<2; ++mm_grid_size){
+    for (int app_grid_size=1; app_grid_size<SMs; ++app_grid_size){
+        //for (int app_grid_size=27; app_grid_size<28; ++app_grid_size){
+    //for (int app_grid_size=1; app_grid_size<2; ++app_grid_size){
+        for (int mm_grid_size=1; mm_grid_size<(SMs-app_grid_size); ++mm_grid_size){
+            //for (int mm_grid_size=8; mm_grid_size<9; ++mm_grid_size){
+        //for (int mm_grid_size=1; mm_grid_size<2; ++mm_grid_size){
 
             int gc_grid_size = SMs - app_grid_size - mm_grid_size;
             //int gc_grid_size = 1;
-            //if (gc_grid_size <= 0) continue;
+            if (gc_grid_size <= 0) continue;
 
             int requests_num{app_grid_size * block_size};
 
@@ -1045,6 +1048,7 @@ void mps_app_one_per_warp(int mono, int kernel_iteration_num, int size_to_alloc,
                     GUARD_CU(cudaPeekAtLastError());
                     GUARD_CU((cudaError_t)cudaGetLastError());
                     debug("start app\n");
+                    //mps_app_one_per_warp
                     start_application(MALLOC, malloc_total_sync, 
                             app_numBlocksPerSm*app_grid_size, 
                             block_size, app_ctx, exit_signal, 
@@ -1112,8 +1116,8 @@ void mps_app_one_per_warp(int mono, int kernel_iteration_num, int size_to_alloc,
                     requests_num, app_grid_size, mm_grid_size, 
                     gc_grid_size, uni_req_per_sec[it]);
             ++it;
-//        }
-//    }
+        }
+    }
     *array_size = it;
 }
 void mps_app(int mono, int kernel_iteration_num, int size_to_alloc, 
@@ -1338,6 +1342,7 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
                     GUARD_CU(cudaPeekAtLastError());
                     GUARD_CU((cudaError_t)cudaGetLastError());
                     debug("start app\n");
+                    //mps_app
                     start_application(MALLOC, malloc_total_sync, 
                             app_numBlocksPerSm*app_grid_size, 
                             block_size, app_ctx, exit_signal, 
@@ -1461,6 +1466,7 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
         mps_app_one_per_warp(mono, kernel_iteration_num, size_to_alloc, ins_size, 
                 num_iterations, SMs, sm_app, sm_mm, sm_gc, allocs, 
                 uni_req_per_sec, array_size);
+
     }else{
         printf("MPS services\n");
 
