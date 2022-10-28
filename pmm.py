@@ -30,18 +30,24 @@ def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num,
     size = array_size[0]
 
     mono = ""
-    if MONO == 0:
+    if MONO == str(0):
         mono = "mps_services" #"monolithic"
-    elif MONO == 1:
+    elif MONO == str(1):
         mono = "MPS_monolithic" #"simple_mono"
-    elif MONO == 2:
+    elif MONO == str(2):
         mono = "monolithic" #"mps_services"
-    elif MONO == 3:
+    elif MONO == str(3):
         mono = "one_per_warp"
+    elif MONO == str(4):
+        mono = "async_reqeust"
+    else:
+        print("mono = ", mono)
 
     pltname = mono + str(testcase) + "_" + str(SMs) + "SMs_" + \
     str(kernel_iter_num) + "_" + str(iteration_num) + "_" + \
     str(size)
+
+
 
     sm_app_list = [sm_app[0][i] for i in range(size)]
     sm_mm_list  = [ sm_mm[0][i] for i in range(size)]
@@ -116,6 +122,8 @@ def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num,
     jj = -35.265
     ax.view_init(azim=ii, elev=jj)
     plt.savefig(pltname + ".pdf")
+    
+    print("file names: ", pltname)
 
     #ii = -135
     #jj = 15
@@ -124,7 +132,6 @@ def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num,
 
        
 def run_test(MONO, testcase, alloc_per_thread, device, pmm_init, 
-            #perf_alloc, 
             instant_size, iteration_num, kernel_iter_num):
 
     print("instant_size = ", instant_size)
@@ -132,8 +139,6 @@ def run_test(MONO, testcase, alloc_per_thread, device, pmm_init,
     size = SMs*SMs*SMs#SMs - 1;
     plt.figure(figsize=(30,15))
 
-    #use malloc:
-    use_malloc = 1
     instant_size    = pointer((c_size_t)(instant_size))
     sm_app          = pointer((c_int * size)())
     sm_mm           = pointer((c_int * size)())
@@ -142,56 +147,18 @@ def run_test(MONO, testcase, alloc_per_thread, device, pmm_init,
     array_size      = pointer((c_int)())
     uni_req_num     = pointer((c_float * size)())
 
-    print("pmm_init, use malloc")
     pmm_init(MONO, kernel_iter_num, alloc_per_thread, instant_size, 
             iteration_num, SMs, sm_app, sm_mm, sm_gc, requests_num, 
             uni_req_num, array_size);
 
-    #device.reset()
-    #print("perf_alloc, use malloc")
-    #perf_alloc(alloc_per_thread, instant_size, iteration_num, SMs, 
-    #           app_sync, uni_req_num, use_malloc)
-
-    ##draw both
     draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num, 
                 iteration_num, SMs, requests_num, sm_app, sm_mm, 
                 sm_gc, uni_req_num, array_size)
   
-    #device.reset()
-    #instant_size0    = pointer((c_size_t)(instant_size))
-    #sm_app0          = pointer((c_int * size)())
-    #sm_mm0           = pointer((c_int * size)())
-    #allocs_size0     = pointer((c_int * size)())
-    #app_launch0      = pointer((c_float * size)())
-    #app_finish0      = pointer((c_float * size)())
-    #app_sync_pmm0    = pointer((c_float * size)())
-    #app_sync0        = pointer((c_float * size)())
-    #uni_req_num_pmm0 = pointer((c_float * size)())
-    #uni_req_num0     = pointer((c_float * size)())
-
-    ##donot use malloc:
-    #use_malloc = 0
-
-    #print("pmm_init, do not use malloc")
-    #pmm_init(use_malloc, alloc_per_thread, instant_size0, iteration_num, 
-    #         SMs, sm_app0, sm_mm0, allocs_size0, app_launch0, app_finish0, 
-    #         app_sync_pmm0, uni_req_num_pmm0);
-
-    #device.reset()
-
-    #print("perf_alloc, do not use malloc")
-    #perf_alloc(alloc_per_thread, instant_size0, iteration_num, SMs, 
-    #           app_sync0, uni_req_num0, use_malloc)
-
-    #draw_graph(plt, testcase, alloc_per_thread, iteration_num, SMs, allocs_size0, 
-    #           sm_app0, sm_mm0, app_launch0, app_finish0, app_sync_pmm0, 
-    #           uni_req_num_pmm0, app_sync0, uni_req_num0, use_malloc)
-
 
 def main(argv):
     ### load shared libraries
     ouroboros = cdll.LoadLibrary('ouroboros_mm.so')
-    #halloc = cdll.LoadLibrary('halloc_mm.so')
 
     ### GPU properties
     device = cu.get_current_device()
@@ -202,38 +169,27 @@ def main(argv):
     alloc_per_thread = 8
     iteration_num = 1
     kernel_iter_num = 1
+    test_type = 3
 
     if len(argv) > 0:
         alloc_per_thread = argv[0]
 
     if len(argv) > 1:
-        iteration_num = argv[1]
+        test_type = argv[1]
 
     if len(argv) > 2:
-        kernel_iter_num = argv[2]
+        iteration_num = argv[2]
 
-    print("alloc_per_thread {} iteration_num {} iteration_per_kernel {} instant_size {}".format(alloc_per_thread, iteration_num, kernel_iter_num, instant_size))
+    if len(argv) > 3:
+        kernel_iter_num = argv[3]
+
+    print("alloc_per_thread {} test_type {} iteration_num {} iteration_per_kernel {} instant_size {}".format(alloc_per_thread, test_type, iteration_num, kernel_iter_num, instant_size))
     
     print("ouroboros test")
     pmm_init = ouroboros.pmm_init
-#    run_test(0, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
-#                instant_size, int(iteration_num), int(kernel_iter_num))
-#
-#    run_test(1, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
-#                instant_size, int(iteration_num), int(kernel_iter_num))
-#
-#    run_test(2, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
-#                instant_size, int(iteration_num), int(kernel_iter_num))
 
-    run_test(3, "OUROBOROS", int(alloc_per_thread), device, pmm_init, #perf_alloc, 
+    run_test(int(test_type), "OUROBOROS", int(alloc_per_thread), device, pmm_init,
                 instant_size, int(iteration_num), int(kernel_iter_num))
-
-    #device.reset()
-    
-    #print("halloc test")
-    #pmm_init = halloc.pmm_init
-    #perf_alloc = halloc.perf_alloc
-    #run_test("HALLOC", int(alloc_per_thread), device, pmm_init, perf_alloc, malloc_on, instant_size, int(iteration_num))
 
 
 if __name__ == "__main__":

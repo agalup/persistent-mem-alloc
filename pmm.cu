@@ -640,7 +640,7 @@ void start_application(int type,
                         &dev_mm};
         //GUARD_CU(cudaProfilerStart());
         timing_sync.startMeasurement();
-        //GUARD_CU(cudaLaunchKernel((void*)app_test, grid_size, block_size, args, 0, 0));
+        //GUARD_CU(cudaLaunchKernel((void*)app_one_per_warp_test, grid_size, block_size, args, 0, 0));
         GUARD_CU(cudaLaunchCooperativeKernel((void*)app_one_per_warp_test, grid_size, block_size, args));
         GUARD_CU((cudaError_t)cuCtxSynchronize());
         GUARD_CU(cudaPeekAtLastError());
@@ -653,7 +653,7 @@ void start_application(int type,
                         &dev_mm};
         //GUARD_CU(cudaProfilerStart());
         timing_sync.startMeasurement();
-        //GUARD_CU(cudaLaunchKernel((void*)app_test, grid_size, block_size, args, 0, 0));
+        //GUARD_CU(cudaLaunchKernel((void*)app_async_request_test, grid_size, block_size, args, 0, 0));
         GUARD_CU(cudaLaunchCooperativeKernel((void*)app_async_request_test, grid_size, block_size, args));
         GUARD_CU((cudaError_t)cuCtxSynchronize());
         GUARD_CU(cudaPeekAtLastError());
@@ -1007,7 +1007,7 @@ void mps_app_one_per_warp(int mono, int kernel_iteration_num, int size_to_alloc,
             allocs[it] = requests_num;
     
             //int mul = 1;
-            int app_numBlocksPerSm = 1;// 0;
+            int app_numBlocksPerSm = 1;//0;
             int gc_numBlocksPerSm =  1;//0;
             int mm_numBlocksPerSm =  1;//0;
 
@@ -1018,9 +1018,9 @@ void mps_app_one_per_warp(int mono, int kernel_iteration_num, int size_to_alloc,
             GUARD_CU(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
                     &mm_numBlocksPerSm, garbage_collector, block_size, 0));
 
-            debug("num blocks per sm by cudaOccMaxActBlPerSM: app %d, mm %d, gc %d\n", 
-            app_numBlocksPerSm, gc_numBlocksPerSm, mm_numBlocksPerSm);
-            fflush(stdout);
+            //debug("num blocks per sm by cudaOccMaxActBlPerSM: app %d, mm %d, gc %d\n", 
+            //app_numBlocksPerSm, gc_numBlocksPerSm, mm_numBlocksPerSm);
+            //fflush(stdout);
 
             CUexecAffinityParam_v1 app_param{CUexecAffinityType::CU_EXEC_AFFINITY_TYPE_SM_COUNT, 
                                         (unsigned int)app_grid_size * app_numBlocksPerSm};
@@ -1516,6 +1516,24 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
             //uni_req_per_sec[it] = (requests_num * 1000.0)/(malloc_total_sync_res.mean_/total_iters);
             uni_req_per_sec[it] = (requests_num * 2000.0)/malloc_total_sync_res.mean_;
 
+            switch (mono){
+                case MPS_mono:
+                    printf("MPS mono. ");
+                    break;
+                case simple_mono:
+                    printf("Simple mono. ");
+                    break;
+                case one_per_warp:
+                    printf("One per warp. "); 
+                    break;
+                case async_request:
+                    printf("Async request. "); 
+                    break;
+                default:
+                    printf("MPS service. "); 
+                    break;
+            }
+            
             printf("#measurements %d, mean %.2lf, #total iters %lu\n", 
                     malloc_total_sync_res.num_, 
                     malloc_total_sync_res.mean_, total_iters);
@@ -1558,6 +1576,8 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
     //std::cout << "#requests\t" << "#sm app\t\t" << "#sm mm\t\t" << 
     //            "#sm gc\t\t" << "#malloc and free per sec\n";
 
+    printf("mono %d\n", mono);
+
     if (mono == MPS_mono){
         printf("MPS_mono\n");
 
@@ -1566,6 +1586,7 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
                 SMs, sm_app, sm_mm, sm_gc, allocs, 
                 uni_req_per_sec, array_size);
 
+        printf("MPS_mono\n");
     }else if (mono == simple_mono){
         printf("simple mono\n");
 
@@ -1574,6 +1595,7 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
                 SMs, sm_app, sm_mm, sm_gc, allocs, 
                 uni_req_per_sec, array_size);
 
+        printf("simple mono\n");
     }else if (mono == one_per_warp){
         printf("one per warp\n");
 
@@ -1581,6 +1603,7 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
                 num_iterations, SMs, sm_app, sm_mm, sm_gc, allocs, 
                 uni_req_per_sec, array_size);
 
+        printf("one per warp\n");
     }else if (mono == async_request){
         printf("async request\n");
 
@@ -1588,6 +1611,7 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
                 num_iterations, SMs, sm_app, sm_mm, sm_gc, allocs, 
                 uni_req_per_sec, array_size);
 
+        printf("async request\n");
     }else{
         printf("MPS services\n");
 
@@ -1595,6 +1619,7 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
                 num_iterations, SMs, sm_app, sm_mm, sm_gc, allocs, 
                 uni_req_per_sec, array_size);
 
+        printf("MPS services\n");
     }
 }
 
