@@ -48,9 +48,10 @@ extern "C"{
 #define FREE        5
 #define GC          7
 
-#define MPS_mono     1
-#define simple_mono  2
-#define one_per_warp 3
+#define MPS_mono      1
+#define simple_mono   2
+#define one_per_warp  3
+#define async_request 4
 
 enum request_type {
     request_empty       = EMPTY,

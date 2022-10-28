@@ -187,9 +187,11 @@ __device__
 void request_processed(request_type type,
                       volatile int* exit_signal,
                       RequestType& requests,
-                      volatile int** dest,
-                      int& req_id){
+                      volatile int** dest
+                      /*,int& req_id*/
+                      ){
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
+    int req_id = -1;
     // SEMAPHORE
     __threadfence();
     acquire_semaphore((int*)requests.lock, thid);
@@ -225,6 +227,31 @@ void request_processed(request_type type,
 }
 
 __device__
+void request_async(request_type type,
+        volatile int* exit_signal,
+        RequestType& requests,
+        volatile int** dest,
+        int size_to_alloc){
+
+    assert(dest);
+    //assert(dest[0]);
+
+    int thid = blockDim.x * blockIdx.x + threadIdx.x;
+    // wait for request to be posted
+    while (!exit_signal[0]){
+        if (requests.request_signal[thid] == request_empty){
+            post_request(type, exit_signal, requests, dest, 
+                         size_to_alloc);
+            break;
+        }
+        __threadfence();
+    }
+    __threadfence();
+    
+    // do not wait request to be completed
+}
+
+__device__
 void request(request_type type,
         volatile int* exit_signal,
         RequestType& requests,
@@ -235,8 +262,8 @@ void request(request_type type,
     //assert(dest[0]);
 
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
-    int req_id = -1;
-    // wait for success
+    /*int req_id = -1;*/
+    // wait for request to be posted
     while (!exit_signal[0]){
         if (requests.request_signal[thid] == request_empty){
             post_request(type, exit_signal, requests, dest, 
@@ -247,11 +274,11 @@ void request(request_type type,
     }
     __threadfence();
 
-    // wait for success
+    // wait for request to be completed
     while (!exit_signal[0]){
         if (requests.request_signal[thid] == request_done){
-            request_processed(type, exit_signal, requests, dest, 
-                              req_id);
+            request_processed(type, exit_signal, requests, dest 
+                              /*,req_id*/ );
             break;
         }
         __threadfence();
@@ -354,6 +381,64 @@ void app_one_per_warp_test(volatile int* exit_signal,
     __threadfence();
 }
 
+//consumer
+__global__
+void app_async_request_test(volatile int* exit_signal,
+        volatile int* exit_counter, 
+        RequestType requests,
+        int* size_to_alloc,
+        int* iter_num,
+        int MONO,
+        MemoryManagerType* mm){
+
+    int thid = blockDim.x * blockIdx.x + threadIdx.x;
+    for (int i=0; i<iter_num[0]; ++i){
+
+        // MEMORY ALLOCATION
+        __threadfence();
+        volatile int* new_ptr = NULL;
+        request_async((request_type)MALLOC, exit_signal, requests, &new_ptr, 
+                 size_to_alloc[0]);
+        /** copied from request **/
+        // wait for request to be completed
+        while (!exit_signal[0]){
+            if (requests.request_signal[thid] == request_done){
+                request_processed((request_type)MALLOC, exit_signal, requests, &new_ptr);
+                break;
+            }
+            __threadfence();
+        }
+        /** copied from request - end**/
+
+        // WRITE TEST
+        new_ptr[0] = thid;
+        __threadfence();
+        assert(requests.d_memory[requests.request_id[thid]]);
+        //int value = d_memory[request_id[thid]][0];
+        //if (value != 0) printf("val = %d\n", value);
+
+        // READ TEST
+        assert(new_ptr[0] == thid);
+
+        // MEMORY RECLAMATION
+        __threadfence();
+        request_async((request_type)FREE, exit_signal, requests, &new_ptr,
+                 size_to_alloc[0]);
+        __threadfence();
+        /** copied from request **/
+        // wait for request to be completed
+        while (!exit_signal[0]){
+            if (requests.request_signal[thid] == request_done){
+                request_processed((request_type)FREE, exit_signal, requests, &new_ptr);
+                break;
+            }
+            __threadfence();
+        }
+        /** copied from request - end**/
+    }
+    atomicAdd((int*)&exit_counter[0], 1);
+    __threadfence();
+}
 
 //consumer
 __global__
@@ -557,6 +642,19 @@ void start_application(int type,
         timing_sync.startMeasurement();
         //GUARD_CU(cudaLaunchKernel((void*)app_test, grid_size, block_size, args, 0, 0));
         GUARD_CU(cudaLaunchCooperativeKernel((void*)app_one_per_warp_test, grid_size, block_size, args));
+        GUARD_CU((cudaError_t)cuCtxSynchronize());
+        GUARD_CU(cudaPeekAtLastError());
+        timing_sync.stopMeasurement();
+        //GUARD_CU(cudaProfilerStop());
+    }else if (mono == async_request){
+        debug("start applications: type %d\n", type);
+        void* args[] = {&exit_signal, &exit_counter, &requests, 
+                        &dev_size_to_alloc, &dev_iter_num, &mono, 
+                        &dev_mm};
+        //GUARD_CU(cudaProfilerStart());
+        timing_sync.startMeasurement();
+        //GUARD_CU(cudaLaunchKernel((void*)app_test, grid_size, block_size, args, 0, 0));
+        GUARD_CU(cudaLaunchCooperativeKernel((void*)app_async_request_test, grid_size, block_size, args));
         GUARD_CU((cudaError_t)cuCtxSynchronize());
         GUARD_CU(cudaPeekAtLastError());
         timing_sync.stopMeasurement();
@@ -1207,8 +1305,24 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
             int gc_numBlocksPerSm =  1;//0;
             int mm_numBlocksPerSm =  1;//0;
 
-            GUARD_CU(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-                    &app_numBlocksPerSm, app_test, block_size, 0));
+            switch (mono){
+                case MPS_mono:
+                    GUARD_CU(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+                            &app_numBlocksPerSm, mono_app_test, block_size, 0));
+                    break;
+                case one_per_warp:
+                    GUARD_CU(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+                            &app_numBlocksPerSm, app_one_per_warp_test, block_size, 0));
+                    break;
+                case async_request :
+                    GUARD_CU(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+                            &app_numBlocksPerSm, app_async_request_test, block_size, 0));
+                    break;
+                default:
+                    GUARD_CU(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+                            &app_numBlocksPerSm, app_test, block_size, 0));
+                    break;
+            }
             GUARD_CU(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
                     &gc_numBlocksPerSm, mem_manager, block_size, 0));
             GUARD_CU(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
@@ -1463,7 +1577,14 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
     }else if (mono == one_per_warp){
         printf("one per warp\n");
 
-        mps_app_one_per_warp(mono, kernel_iteration_num, size_to_alloc, ins_size, 
+        mps_app(mono, kernel_iteration_num, size_to_alloc, ins_size, 
+                num_iterations, SMs, sm_app, sm_mm, sm_gc, allocs, 
+                uni_req_per_sec, array_size);
+
+    }else if (mono == async_request){
+        printf("async request\n");
+
+        mps_app(mono, kernel_iteration_num, size_to_alloc, ins_size, 
                 num_iterations, SMs, sm_app, sm_mm, sm_gc, allocs, 
                 uni_req_per_sec, array_size);
 
