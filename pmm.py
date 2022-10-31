@@ -29,19 +29,21 @@ def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num,
     print("results size ", array_size[0])
     size = array_size[0]
 
+    print("type of MONO", type(MONO))
+
     mono = ""
-    if MONO == str(0):
+    if MONO == str(0) or MONO == 0:
         mono = "mps_services" #"monolithic"
-    elif MONO == str(1):
+    elif MONO == str(1) or MONO == 1:
         mono = "MPS_monolithic" #"simple_mono"
-    elif MONO == str(2):
+    elif MONO == str(2) or MONO == 2:
         mono = "monolithic" #"mps_services"
-    elif MONO == str(3):
+    elif MONO == str(3) or MONO == 3:
         mono = "one_per_warp"
-    elif MONO == str(4):
+    elif MONO == str(4) or MONO == 4:
         mono = "async_reqeust"
-    else:
-        print("mono = ", mono)
+    
+    print("mono = ", mono, "MONO = ", MONO)
 
     pltname = mono + str(testcase) + "_" + str(SMs) + "SMs_" + \
     str(kernel_iter_num) + "_" + str(iteration_num) + "_" + \
