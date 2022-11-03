@@ -162,6 +162,7 @@ def main(argv):
     ### load shared libraries
     ouroboros = cdll.LoadLibrary('ouroboros_mm.so')
 
+    print("cu.gpus = ", cu.gpus)
     ### GPU properties
     device = cu.get_current_device()
 
