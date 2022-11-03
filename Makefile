@@ -19,12 +19,20 @@ $(EXEC):
     #--expt-relaxed-constexpr -I include -I Ouroboros_origin/include -DOUROBOROS__ main.cu \
     #-lcuda -I SlabHash -I SlabHash/SlabAlloc/src -o cubin/ouroboros_mm_O3.cubin
 	
-	nvcc -O3 -Xptxas -O3 -arch=sm_75 --resource-usage -lineinfo -Xptxas --warn-on-spills \
-    --expt-relaxed-constexpr -I include -I Ouroboros_origin/include -DOUROBOROS__ main.cu \
-    -lcuda -I SlabHash -I SlabHash/SlabAlloc/src -o ouroboros_mm
+#	nvcc -O3 -Xptxas -O3 -arch=sm_70 --resource-usage -lineinfo -Xptxas --warn-on-spills \
+#    --expt-relaxed-constexpr -I include -I Ouroboros_origin/include -DOUROBOROS__ main.cu \
+#    -lcuda -I SlabHash -I SlabHash/SlabAlloc/src -o ouroboros_mm
+#	
+#	nvcc -g -O3 -Xptxas -O3 -arch=sm_70 --resource-usage -Xptxas --warn-on-spills --maxrregcount 32 \
+#    --expt-relaxed-constexpr -I include -I Ouroboros_origin/include -DOUROBOROS__ \
+#    -lcuda --compiler-options '-fPIC' -Xcompiler --shared pmm.cu -o ouroboros_mm.so 
+
+	#nvcc -g -G -O0 -Xptxas -O0 -arch=sm_70 \
+    #--compiler-options '-fPIC' -Xcompiler  -lcuda -lcudart -I include -I Ouroboros_origin/include -DOUROBOROS__ main.cu -o ouroboros_mm --expt-relaxed-constexpr
+
+	nvcc -g -G -O0 -Xptxas -O0 -arch=sm_70 \
+    -lcuda -lcudart -I include -I Ouroboros_origin/include -DOUROBOROS__ main.cu -o ouroboros_mm --expt-relaxed-constexpr
 	
-	nvcc -g -O3 -Xptxas -O3 -arch=sm_75 --resource-usage -Xptxas --warn-on-spills --maxrregcount 32 \
+	nvcc -g -G -O0 -Xptxas -O0 -arch=sm_70 --resource-usage -Xptxas --warn-on-spills --maxrregcount 32 \
     --expt-relaxed-constexpr -I include -I Ouroboros_origin/include -DOUROBOROS__ \
     -lcuda --compiler-options '-fPIC' -Xcompiler --shared pmm.cu -o ouroboros_mm.so 
- 
-   

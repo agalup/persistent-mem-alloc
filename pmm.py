@@ -24,7 +24,7 @@ from numba import cuda as cu
 
 def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num, 
                 iteration_num, SMs, allocs_size, sm_app, sm_mm, sm_gc, 
-                uni_req_num, array_size):
+                uni_req_num, array_size, block_size):
 
     print("results size ", array_size[0])
     size = array_size[0]
@@ -45,11 +45,10 @@ def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num,
     
     print("mono = ", mono, "MONO = ", MONO)
 
-    pltname = mono + str(testcase) + "_" + str(SMs) + "SMs_" + \
-    str(kernel_iter_num) + "_" + str(iteration_num) + "_" + \
-    str(size)
-
-
+    pltname = mono + "_" + str(testcase) + "_" + str(SMs) + "SMs_" + \
+    str(kernel_iter_num) + "device_" + str(iteration_num) + "host_" + \
+    str(block_size) + "th_" + str(alloc_per_thread) + "B_" + \
+    str(size) + "SM_assign_cases"
 
     sm_app_list = [sm_app[0][i] for i in range(size)]
     sm_mm_list  = [ sm_mm[0][i] for i in range(size)]
@@ -134,9 +133,10 @@ def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num,
 
        
 def run_test(MONO, testcase, alloc_per_thread, device, pmm_init, 
-            instant_size, iteration_num, kernel_iter_num):
+            instant_size, iteration_num, kernel_iter_num, block_size, device_id):
 
     print("instant_size = ", instant_size)
+    print("block size = ", block_size)
     SMs = getattr(device, 'MULTIPROCESSOR_COUNT')
     size = SMs*SMs*SMs#SMs - 1;
     plt.figure(figsize=(30,15))
@@ -151,11 +151,11 @@ def run_test(MONO, testcase, alloc_per_thread, device, pmm_init,
 
     pmm_init(MONO, kernel_iter_num, alloc_per_thread, instant_size, 
             iteration_num, SMs, sm_app, sm_mm, sm_gc, requests_num, 
-            uni_req_num, array_size);
+            uni_req_num, array_size, block_size, device_id);
 
     draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num, 
                 iteration_num, SMs, requests_num, sm_app, sm_mm, 
-                sm_gc, uni_req_num, array_size)
+                sm_gc, uni_req_num, array_size, block_size)
   
 
 def main(argv):
@@ -171,7 +171,9 @@ def main(argv):
     alloc_per_thread = 8
     iteration_num = 1
     kernel_iter_num = 1
+    block_size = 1024
     test_type = 3
+    device_id = 0
 
     if len(argv) > 0:
         alloc_per_thread = argv[0]
@@ -183,15 +185,26 @@ def main(argv):
         iteration_num = argv[2]
 
     if len(argv) > 3:
-        kernel_iter_num = argv[3]
+        block_size = argv[3]
 
-    print("alloc_per_thread {} test_type {} iteration_num {} iteration_per_kernel {} instant_size {}".format(alloc_per_thread, test_type, iteration_num, kernel_iter_num, instant_size))
+    if len(argv) > 4:
+        device_id = argv[4]
+
+    if len(argv) > 5:
+        kernel_iter_num = argv[5]
+
+    print("alloc_per_thread {} test_type {} iteration_num {} block_size {} device {} iteration_per_kernel {} instant_size {}".format(alloc_per_thread, test_type, iteration_num, block_size, device_id, kernel_iter_num, instant_size))
+    print("test type: 0 mps_service")
+    print("           1 MPS_monolithic")
+    print("           2 monolithic")
+    print("           3 one per warp")
+    print("           4 async request")
     
     print("ouroboros test")
     pmm_init = ouroboros.pmm_init
 
     run_test(int(test_type), "OUROBOROS", int(alloc_per_thread), device, pmm_init,
-                instant_size, int(iteration_num), int(kernel_iter_num))
+                instant_size, int(iteration_num), int(kernel_iter_num), int(block_size), int(device_id))
 
 
 if __name__ == "__main__":
