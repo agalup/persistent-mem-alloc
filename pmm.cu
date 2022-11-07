@@ -68,6 +68,10 @@ void _request_processing(
             requests.d_memory[addr_id][0] = 0;
             requests.request_dest[request_id] = &requests.d_memory[addr_id][1];
             atomicExch((int*)&requests.request_signal[request_id], request_done);
+            if (requests.d_memory[addr_id][0] != 0)
+                printf("d_memory{%d} = %d\n", addr_id, requests.d_memory[addr_id][0]);
+            assert(requests.d_memory[addr_id][0] == 0);
+            __threadfence();
             break;
 
         case FREE:
@@ -355,7 +359,7 @@ void app_one_per_warp_test(volatile int* exit_signal,
         __threadfence();
         volatile int* new_ptr = NULL;
         if (lane_id == 0){
-            request((request_type)MALLOC, exit_signal, requests, &ptr_tab[warp_id], 32*size_to_alloc[0]);
+            request((request_type)MALLOC, exit_signal, requests, (volatile int**)&ptr_tab[warp_id], 32*size_to_alloc[0]);
             //request((request_type)MALLOC, exit_signal, requests, &new_ptr, 
             //ptr_tab[warp_id] = new_ptr;
             assert(ptr_tab[warp_id]);
@@ -374,7 +378,7 @@ void app_one_per_warp_test(volatile int* exit_signal,
         __threadfence();
         __syncthreads();
         if (lane_id == 0){
-            request((request_type)FREE, exit_signal, requests, &ptr_tab[warp_id], 32*size_to_alloc[0]);
+            request((request_type)FREE, exit_signal, requests, (volatile int**)&ptr_tab[warp_id], 32*size_to_alloc[0]);
             //request((request_type)FREE, exit_signal, requests, &new_ptr,
         }
         __threadfence();
@@ -383,6 +387,72 @@ void app_one_per_warp_test(volatile int* exit_signal,
     __threadfence();
 }
 
+//consumer
+__global__
+void app_async_one_per_warp_test(volatile int* exit_signal,
+        volatile int* exit_counter, 
+        RequestType requests,
+        int* size_to_alloc,
+        int* iter_num,
+        int MONO,
+        MemoryManagerType* mm){
+
+    int thid = blockDim.x * blockIdx.x + threadIdx.x;
+    __shared__ int* ptr_tab[32];
+
+    int warp_id = threadIdx.x/32;
+    int lane_id = threadIdx.x%32;
+    if (lane_id == 0) ptr_tab[warp_id] = NULL;
+
+    __syncthreads();
+
+    for (int i=0; i<iter_num[0]; ++i){
+        __threadfence();
+        volatile int* new_ptr = NULL;
+        if (lane_id == 0){
+            request_async((request_type)MALLOC, exit_signal, requests, (volatile int**)&ptr_tab[warp_id], 32*size_to_alloc[0]);
+            /** copied from request **/
+            // wait for request to be completed
+            while (!exit_signal[0]){
+                if (requests.request_signal[thid] == request_done){
+                    request_processed((request_type)MALLOC, exit_signal, requests, (volatile int**)&ptr_tab[warp_id]);
+                    break;
+                }
+                __threadfence();
+            }
+            /** copied from request - end**/
+            assert(ptr_tab[warp_id]);
+        }
+        __threadfence();
+        __syncthreads();
+        int offset = lane_id * size_to_alloc[0];
+        //new_ptr = reinterpret_cast<int*>(reinterpret_cast<char*>(ptr_tab[warp_id]) + offset);
+        new_ptr = (volatile int*)(((volatile char*)(ptr_tab[warp_id])) + offset);
+        __syncthreads();
+        __threadfence();
+        new_ptr[0] = thid;
+        if (lane_id == 0) assert(requests.d_memory[requests.request_id[thid]]);
+        assert(new_ptr[0] == thid);
+        __threadfence();
+        __syncthreads();
+        if (lane_id == 0){
+            request_async((request_type)FREE, exit_signal, requests, (volatile int**)&ptr_tab[warp_id], 32*size_to_alloc[0]);
+            /** copied from request **/
+            // wait for request to be completed
+            while (!exit_signal[0]){
+                if (requests.request_signal[thid] == request_done){
+                    request_processed((request_type)FREE, exit_signal, requests, (volatile int**)&ptr_tab[warp_id]);
+                    break;
+                }
+                __threadfence();
+            }
+            /** copied from request - end**/
+        }
+        __threadfence();
+    }
+    atomicAdd((int*)&exit_counter[0], 1);
+    __threadfence();
+}
 //consumer
 __global__
 void app_async_request_test(volatile int* exit_signal,
@@ -399,8 +469,7 @@ void app_async_request_test(volatile int* exit_signal,
         // MEMORY ALLOCATION
         __threadfence();
         volatile int* new_ptr = NULL;
-        request_async((request_type)MALLOC, exit_signal, requests, &new_ptr, 
-                 size_to_alloc[0]);
+        request_async((request_type)MALLOC, exit_signal, requests, &new_ptr, size_to_alloc[0]);
         /** copied from request **/
         // wait for request to be completed
         while (!exit_signal[0]){
@@ -424,8 +493,7 @@ void app_async_request_test(volatile int* exit_signal,
 
         // MEMORY RECLAMATION
         __threadfence();
-        request_async((request_type)FREE, exit_signal, requests, &new_ptr,
-                 size_to_alloc[0]);
+        request_async((request_type)FREE, exit_signal, requests, &new_ptr, size_to_alloc[0]);
         __threadfence();
         /** copied from request **/
         // wait for request to be completed
@@ -552,8 +620,8 @@ void start_memory_manager(PerfMeasure& timing_mm,
   
     auto dev_mm = memory_manager.getDeviceMemoryManager();
     void *args[] = {&exit_signal, &mm_started, &requests, &dev_mm};
-    //GUARD_CU(cudaLaunchCooperativeKernel((void*)mem_manager, mm_grid_size, block_size, args));
-    GUARD_CU(cudaLaunchKernel((void*)mem_manager, mm_grid_size, block_size, args));
+    GUARD_CU(cudaLaunchCooperativeKernel((void*)mem_manager, mm_grid_size, block_size, args));
+    //GUARD_CU(cudaLaunchKernel((void*)mem_manager, mm_grid_size, block_size, args));
     GUARD_CU((cudaError_t)cudaGetLastError());
     GUARD_CU(cudaPeekAtLastError());
 
@@ -572,8 +640,8 @@ void start_garbage_collector(PerfMeasure& timing_gc,
     
     auto dev_mm = memory_manager.getDeviceMemoryManager();
     void *args[] = {&exit_signal, &gc_started, &requests, &dev_mm};
-    //GUARD_CU(cudaLaunchCooperativeKernel((void*)garbage_collector, gc_grid_size, block_size, args));
-    GUARD_CU(cudaLaunchKernel((void*)garbage_collector, gc_grid_size, block_size, args));
+    GUARD_CU(cudaLaunchCooperativeKernel((void*)garbage_collector, gc_grid_size, block_size, args));
+    //GUARD_CU(cudaLaunchKernel((void*)garbage_collector, gc_grid_size, block_size, args));
     GUARD_CU((cudaError_t)cudaGetLastError());
     GUARD_CU(cudaPeekAtLastError());
     
@@ -628,8 +696,8 @@ void start_application(int type,
         void* args[] = {&requests.d_memory, &exit_counter, &dev_size_to_alloc, &dev_iter_num, &dev_mm};
         //GUARD_CU(cudaProfilerStart());
         timing_sync.startMeasurement();
-        GUARD_CU(cudaLaunchKernel((void*)mono_app_test, grid_size, block_size, args, 0, 0));
-        //GUARD_CU(cudaLaunchCooperativeKernel((void*)mono_app_test, grid_size, block_size, args, 0, 0));
+        //GUARD_CU(cudaLaunchKernel((void*)mono_app_test, grid_size, block_size, args, 0, 0));
+        GUARD_CU(cudaLaunchCooperativeKernel((void*)mono_app_test, grid_size, block_size, args, 0, 0));
         GUARD_CU((cudaError_t)cuCtxSynchronize());
         GUARD_CU(cudaPeekAtLastError());
         timing_sync.stopMeasurement();
@@ -640,8 +708,8 @@ void start_application(int type,
         //GUARD_CU(cudaProfilerStart());
         timing_sync.startMeasurement();
         debug("start application one per warp\n");
-        GUARD_CU(cudaLaunchKernel((void*)app_one_per_warp_test, grid_size, block_size, args, 0, 0));
-        //GUARD_CU(cudaLaunchCooperativeKernel((void*)app_one_per_warp_test, grid_size, block_size, args));
+        //GUARD_CU(cudaLaunchKernel((void*)app_one_per_warp_test, grid_size, block_size, args, 0, 0));
+        GUARD_CU(cudaLaunchCooperativeKernel((void*)app_one_per_warp_test, grid_size, block_size, args));
         debug("stop application one per warp\n");
         GUARD_CU((cudaError_t)cuCtxSynchronize());
         debug("stop application one per warp\n");
@@ -657,8 +725,20 @@ void start_application(int type,
                         &mono, &dev_mm};
         //GUARD_CU(cudaProfilerStart());
         timing_sync.startMeasurement();
-        GUARD_CU(cudaLaunchKernel((void*)app_async_request_test, grid_size, block_size, args, 0, 0));
-        //GUARD_CU(cudaLaunchCooperativeKernel((void*)app_async_request_test, grid_size, block_size, args));
+        //GUARD_CU(cudaLaunchKernel((void*)app_async_request_test, grid_size, block_size, args, 0, 0));
+        GUARD_CU(cudaLaunchCooperativeKernel((void*)app_async_request_test, grid_size, block_size, args));
+        GUARD_CU((cudaError_t)cuCtxSynchronize());
+        GUARD_CU(cudaPeekAtLastError());
+        timing_sync.stopMeasurement();
+        //GUARD_CU(cudaProfilerStop());
+    }else if (mono == async_one_per_warp){
+        debug("start applications: type %d\n", type);
+        void* args[] = {&exit_signal, &exit_counter, &requests, &dev_size_to_alloc, &dev_iter_num, 
+                        &mono, &dev_mm};
+        //GUARD_CU(cudaProfilerStart());
+        timing_sync.startMeasurement();
+        //GUARD_CU(cudaLaunchKernel((void*)app_async_request_test, grid_size, block_size, args, 0, 0));
+        GUARD_CU(cudaLaunchCooperativeKernel((void*)app_async_one_per_warp_test, grid_size, block_size, args));
         GUARD_CU((cudaError_t)cuCtxSynchronize());
         GUARD_CU(cudaPeekAtLastError());
         timing_sync.stopMeasurement();
@@ -669,8 +749,8 @@ void start_application(int type,
                         &mono, &dev_mm};
         //GUARD_CU(cudaProfilerStart());
         timing_sync.startMeasurement();
-        GUARD_CU(cudaLaunchKernel((void*)app_test, grid_size, block_size, args, 0, 0));
-        //GUARD_CU(cudaLaunchCooperativeKernel((void*)app_test, grid_size, block_size, args));
+        //GUARD_CU(cudaLaunchKernel((void*)app_test, grid_size, block_size, args, 0, 0));
+        GUARD_CU(cudaLaunchCooperativeKernel((void*)app_test, grid_size, block_size, args));
         GUARD_CU((cudaError_t)cuCtxSynchronize());
         GUARD_CU(cudaPeekAtLastError());
         timing_sync.stopMeasurement();
@@ -992,19 +1072,19 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
     //int block_size = 256;
     //SMs -= 10;
 
-    for (int app_grid_size=1; app_grid_size<SMs; ++app_grid_size){
+    for (int app_grid_size=55; app_grid_size<SMs; ++app_grid_size){
     //for (int app_grid_size=1; app_grid_size<2; ++app_grid_size){
-        //for (int mm_grid_size=1; mm_grid_size<(SMs-app_grid_size); ++mm_grid_size){
-        for (int mm_grid_size=1; mm_grid_size<=app_grid_size; ++mm_grid_size){
+        for (int mm_grid_size=1; mm_grid_size<(SMs-app_grid_size); ++mm_grid_size){
+        //for (int mm_grid_size=1; mm_grid_size<=app_grid_size; ++mm_grid_size){
 
-            for (int gc_grid_size=1; gc_grid_size<=app_grid_size; ++gc_grid_size){
+            //for (int gc_grid_size=1; gc_grid_size<=app_grid_size; ++gc_grid_size){
 
-                if (app_grid_size + mm_grid_size + gc_grid_size > SMs) 
-                    continue;
+                //if (app_grid_size + mm_grid_size + gc_grid_size > SMs) 
+                   // continue;
 
-                //int gc_grid_size = SMs - app_grid_size - mm_grid_size;
+                int gc_grid_size = SMs - app_grid_size - mm_grid_size;
                 ////int gc_grid_size = 1;
-                //if (gc_grid_size < 1) continue;
+                if (gc_grid_size < 1) continue;
                 //if (gc_grid_size > app_grid_size) continue;
 
                 int requests_num{app_grid_size * block_size};
@@ -1267,6 +1347,9 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
                     case async_request:
                         printf("Async request. "); 
                         break;
+                    case async_one_per_warp:
+                        printf("Async one per warp. ");
+                        break;
                     default:
                         printf("MPS service. "); 
                         break;
@@ -1280,7 +1363,7 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
                         requests_num, app_grid_size, mm_grid_size, 
                         gc_grid_size, uni_req_per_sec[it]);
                 ++it;
-            }
+            //}
         }
     }
     *array_size = it;
@@ -1328,7 +1411,7 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
         mps_monolithic_app(mono, kernel_iteration_num, 
                 size_to_alloc, ins_size, num_iterations, 
                 SMs, sm_app, sm_mm, sm_gc, allocs, 
-                uni_req_per_sec, array_size, device);
+                uni_req_per_sec, array_size, block_size, device);
 
         printf("MPS_mono\n");
     }else if (mono == simple_mono){
@@ -1356,6 +1439,14 @@ void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
                 uni_req_per_sec, array_size, block_size, device);
 
         printf("async request\n");
+    }else if (mono == async_one_per_warp){
+        printf("async one per warp\n");
+        
+        mps_app(mono, kernel_iteration_num, size_to_alloc, ins_size, 
+                num_iterations, SMs, sm_app, sm_mm, sm_gc, allocs, 
+                uni_req_per_sec, array_size, block_size, device);
+
+        printf("async one per warp\n");
     }else{
         printf("MPS services\n");
 

@@ -48,11 +48,12 @@ extern "C"{
 #define FREE        5
 #define GC          7
 
-#define MPS           0
-#define MPS_mono      1
-#define simple_mono   2
-#define one_per_warp  3
-#define async_request 4
+#define MPS                0
+#define MPS_mono           1
+#define simple_mono        2
+#define one_per_warp       3
+#define async_request      4
+#define async_one_per_warp 5
 
 enum request_type {
     request_empty       = EMPTY,
@@ -159,23 +160,6 @@ struct RequestType{
     void memset();
     void free();
 };
-
-/*
-void RequestType::init(size_t Size){
-    size = Size;
-    GUARD_CU(cudaMallocManaged(&requests_number, sizeof(volatile int)));
-    GUARD_CU(cudaMallocManaged(&request_counter, sizeof(volatile int)));
-    GUARD_CU(cudaMallocManaged(&request_signal, size * sizeof(volatile int)));
-    GUARD_CU(cudaMallocManaged(&request_id, size * sizeof(volatile int)));
-    GUARD_CU(cudaMallocManaged(&request_mem_size, size * sizeof(volatile int)));
-    GUARD_CU(cudaMallocManaged(&lock, size * sizeof(volatile int)));
-    GUARD_CU(cudaMallocManaged(&d_memory, size * sizeof(volatile int*)));
-    GUARD_CU(cudaMallocManaged(&request_dest, size * sizeof(volatile int*)));
-
-    GUARD_CU(cudaDeviceSynchronize());
-    GUARD_CU(cudaPeekAtLastError());
-}
-*/
 
 void RequestType::init(size_t Size){
     size = Size;

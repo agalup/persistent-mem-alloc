@@ -41,7 +41,9 @@ def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num,
     elif MONO == str(3) or MONO == 3:
         mono = "one_per_warp"
     elif MONO == str(4) or MONO == 4:
-        mono = "async_reqeust"
+        mono = "async_request"
+    elif MONO == str(5) or MONO == 5:
+        mono = "async_one_per_warp"
     
     print("mono = ", mono, "MONO = ", MONO)
 
@@ -166,8 +168,8 @@ def main(argv):
     ### GPU properties
     device = cu.get_current_device()
 
-    #instant_size = (2 ** (3+10+10+10)) #(8*1024*1024*1024)
-    instant_size = 7 * 1024*1024*1024
+    #instant_size = 7 * 1024*1024*1024
+    instant_size = 16 * 1024*1024*1024
     print("instant_size ", instant_size)
     alloc_per_thread = 8
     iteration_num = 1
