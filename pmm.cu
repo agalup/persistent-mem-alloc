@@ -19,39 +19,32 @@ using namespace std;
 extern "C" {
 
 __global__
-void mem_free(Runtime runtime, 
-              MemoryManagerType* mm/*, 
-              volatile int** d_memory, 
-              volatile int* request_id, 
-              volatile int* requests_num*/){
+void mem_free(Runtime runtime){
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
     if (thid >= runtime.app_threads_num){
         return;
     }
     __threadfence();
-    //if (d_memory[thid]){
     if (runtime.requests->d_memory[thid]){
         printf("sync error: %d was not released before\n", thid);
-        mm->free((void*)runtime.requests->d_memory[thid]);
+        runtime.mem_manager->free((void*)runtime.requests->d_memory[thid]);
     }
 }
 
 
 __global__
-void garbage_collector(Runtime runtime, MemoryManagerType* mm){
+void garbage_collector(Runtime runtime){
     int thid = blockIdx.x * blockDim.x + threadIdx.x;
     runtime.gc->start();
     RequestType* reqs = runtime.requests;
     while (runtime.is_working()){
         //debug("hello gc! %d\n", thid);
         for (int request_id = thid; !runtime.exit_signal[0] && 
-                //request_id < requests.requests_number[0]; 
-                //request_id < reqs->number();
                 request_id < runtime.size();
                 request_id += blockDim.x*gridDim.x){
             __threadfence();
             if (reqs->type(request_id) == GC){
-                runtime._request_processing(request_id, mm);
+                runtime._request_processing(request_id);
                 __threadfence();
             }
         }
@@ -61,20 +54,18 @@ void garbage_collector(Runtime runtime, MemoryManagerType* mm){
 
 //producer
 __global__
-void mem_manager(Runtime runtime, MemoryManagerType* mm){
+void mem_manager(Runtime runtime){
     int thid = blockIdx.x * blockDim.x + threadIdx.x;
     runtime.mm->start();
     RequestType* reqs = runtime.requests;
     while (runtime.is_working()){
         //debug("hello mm %d, request no %d!\n", thid, reqs->number());
         for (int request_id = thid; !runtime.exit_signal[0] &&
-               // request_id < reqs->number(); 
                 request_id < runtime.size();
                 request_id += blockDim.x*gridDim.x){
-
             __threadfence();
             if (reqs->type(request_id) == MALLOC or reqs->type(request_id) == FREE){
-                runtime._request_processing(request_id, mm);
+                runtime._request_processing(request_id);
                 __threadfence();
                 debug("mm: request done %d\n", request_id);
             }
@@ -139,39 +130,22 @@ void app_one_per_warp_test(int* size_to_alloc,
 
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
     __shared__ int* ptr_tab[32];
-
     int warp_id = threadIdx.x/32;
-    int lane_id = threadIdx.x%32;
-
-    if (lane_id == 0) ptr_tab[warp_id] = NULL;
-
-    __threadfence();
-    __syncthreads();
-
+    
     for (int i=0; i<iter_num[0]; ++i){
-        __threadfence();
+        // ALLOCTAION
         volatile int* new_ptr = NULL;
-        if (lane_id == 0){
-            runtime.malloc((volatile int**)&ptr_tab[warp_id], 32*size_to_alloc[0]);
-            __threadfence();
-            assert(ptr_tab[warp_id]);
-        }
-        __threadfence();
-        __syncthreads();
-        int offset = lane_id * size_to_alloc[0];
-        //new_ptr = reinterpret_cast<int*>(reinterpret_cast<char*>(ptr_tab[warp_id]) + offset);
-        new_ptr = (volatile int*)(((volatile char*)(ptr_tab[warp_id])) + offset);
-        __syncthreads();
-        __threadfence();
+        runtime.malloc_warp(&new_ptr, &ptr_tab[warp_id], size_to_alloc[0]);
         assert(new_ptr);
+
+        // WRITE
         new_ptr[0] = thid;
+
+        // READ
         assert(new_ptr[0] == thid);
-        __threadfence();
-        __syncthreads();
-        if (lane_id == 0){
-            runtime.free(ptr_tab[warp_id]);
-        }
-        __threadfence();
+        
+        // RECLAMATION
+        runtime.free_warp(new_ptr);
     }
     atomicAdd((int*)(runtime.exit_counter), 1);
     __threadfence();
@@ -196,8 +170,12 @@ void app_async_one_per_warp_test(int* size_to_alloc,
     for (int i=0; i<iter_num[0]; ++i){
         __threadfence();
         volatile int* new_ptr = NULL;
+        //Future future_ptr;
+        //runtime.malloc_warp(future_ptr, size_to_alloc[0]);
+
         if (lane_id == 0){
             runtime.malloc_async((volatile int**)&ptr_tab[warp_id], 32*size_to_alloc[0]);
+            //runtime.malloc_async(future_ptr, 32*size_to_alloc[0]);
             /** copied from request **/
             // wait for request to be completed
             while (runtime.is_working()){
@@ -207,8 +185,8 @@ void app_async_one_per_warp_test(int* size_to_alloc,
                 }
                 __threadfence();
             }
-            /** copied from request - end**/
-            assert(ptr_tab[warp_id]);
+            /* copied from request - end**/
+            //assert(ptr_tab[warp_id]);
         }
         __threadfence();
         __syncthreads();
@@ -251,20 +229,11 @@ void app_async_request_test(int* size_to_alloc,
 
         // MEMORY ALLOCATION
         __threadfence();
-        volatile int* new_ptr = NULL;
-        runtime.malloc_async((volatile int**)&new_ptr, size_to_alloc[0]);
-        /** copied from request **/
-        // wait for request to be completed
-        while (runtime.is_working()){
-            if (runtime.is_finished(thid)){
-                runtime.request_processed((request_type)MALLOC, &new_ptr);
-                break;
-            }
-            __threadfence();
-        }
-        /** copied from request - end**/
-
+        Future future_ptr; //Can I pass it outside of the kernel?
+        runtime.malloc_async(future_ptr, size_to_alloc[0]);
+        
         // WRITE TEST
+        volatile int* new_ptr = future_ptr.get();
         new_ptr[0] = thid;
         __threadfence();
 
@@ -273,18 +242,9 @@ void app_async_request_test(int* size_to_alloc,
 
         // MEMORY RECLAMATION
         __threadfence();
-        runtime.free_async((volatile int**)&new_ptr);
+        runtime.free_async(future_ptr);;
         __threadfence();
-        /** copied from request **/
-        // wait for request to be completed
-        while (runtime.is_working()){
-            if (runtime.is_finished(thid)){
-                runtime.request_processed((request_type)FREE, &new_ptr);
-                break;
-            }
-            __threadfence();
-        }
-        /** copied from request - end**/
+        runtime.wait((request_type)FREE, thid, &future_ptr.ptr);
     }
     atomicAdd((int*)(runtime.exit_counter), 1);
     __threadfence();
@@ -298,15 +258,19 @@ void app_test(int* size_to_alloc,
               Runtime runtime){
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
     for (int i=0; i<iter_num[0]; ++i){
+        // ALLOC
         volatile int* new_ptr;
         runtime.malloc(&new_ptr, size_to_alloc[0]);
-        new_ptr[0] = thid;
-        __threadfence();
         assert(new_ptr);
+
+        // WRITE
+        new_ptr[0] = thid;
+
+        // READ
         assert(new_ptr[0] == thid);
-        __threadfence();
+
+        // RECLAMATION
         runtime.free(new_ptr);
-        __threadfence();
     }
     atomicAdd((int*)(runtime.exit_counter), 1);
     __threadfence();
@@ -371,13 +335,11 @@ void start_memory_manager(PerfMeasure& timing_mm,
                           uint32_t mm_grid_size,
                           uint32_t block_size, 
                           CUcontext& mm_ctx,
-                          Runtime& runtime, 
-                          MemoryManagerType& memory_manager){
+                          Runtime& runtime){
     timing_mm.startMeasurement();
     assert(runtime.exit_signal);
   
-    auto dev_mm = memory_manager.getDeviceMemoryManager();
-    void *args[] = {&runtime, &dev_mm};
+    void *args[] = {&runtime};
     printf("go mem manager kernel\n");
     fflush(stdout);
     GUARD_CU(cudaLaunchCooperativeKernel((void*)mem_manager, mm_grid_size, block_size, args));
@@ -393,16 +355,14 @@ void start_garbage_collector(PerfMeasure& timing_gc,
                           uint32_t gc_grid_size,
                           uint32_t block_size, 
                           CUcontext& gc_ctx,
-                          Runtime& runtime,
-                          MemoryManagerType& memory_manager){
+                          Runtime& runtime){
     timing_gc.startMeasurement();
     assert(runtime.exit_signal);
     //assert(runtime->gc);
     printf("hello gc\n");
     fflush(stdout);
     
-    auto dev_mm = memory_manager.getDeviceMemoryManager();
-    void *args[] = {&runtime, &dev_mm};
+    void *args[] = {&runtime};
     printf("go gc kernel\n");
     fflush(stdout);
     GUARD_CU(cudaLaunchCooperativeKernel((void*)garbage_collector, gc_grid_size, block_size, args));
@@ -432,22 +392,13 @@ void start_callback_server(PerfMeasure& timing_cb,
 
 void clean_memory(uint32_t grid_size,
                   uint32_t block_size, 
-                  Runtime& runtime,
-                  //RequestType* requests,
-                  MemoryManagerType& memory_manager//,
-                  //volatile int* exit_signal
-                  ){
+                  Runtime& runtime){
 
     runtime.exit_signal[0] = 1;
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
-    auto dev_mem = memory_manager.getDeviceMemoryManager();
-    void* args[] = {&runtime, &dev_mem};
+    void* args[] = {&runtime};
     GUARD_CU(cudaLaunchCooperativeKernel((void*)mem_free, grid_size, block_size, args));
-    //mem_free<<<grid_size, block_size>>>(requests->d_memory, 
-    //        requests->request_id, 
-    //        memory_manager.getDeviceMemoryManager(),
-    //        requests->requests_number);
 
     GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaDeviceSynchronize());
@@ -455,7 +406,6 @@ void clean_memory(uint32_t grid_size,
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
 }
-
 
 void start_application(int type, 
                        PerfMeasure& timing_sync, 
@@ -716,13 +666,9 @@ void mps_monolithic_app(int mono, int kernel_iteration_num, int size_to_alloc,
 
         GUARD_CU(cudaDeviceSynchronize());
         GUARD_CU(cudaPeekAtLastError());
-/*
-        RequestType requests;
-        requests.init(requests_num);
-        requests.memset();*/
 
         Runtime runtime;
-        runtime.init(requests_num, device);
+        runtime.init(requests_num, device, memory_manager);
 
         printf("request addr %x\n", runtime.requests);
 
@@ -753,13 +699,13 @@ void mps_monolithic_app(int mono, int kernel_iteration_num, int size_to_alloc,
 
         if (not kernel_complete){
             printf("kernel is not completed, free memory which app allocated\n");
-            clean_memory(app_grid_size, block_size, runtime, memory_manager);//runtime.requests, memory_manager, runtime.exit_signal);
+            clean_memory(app_grid_size, block_size, runtime);
             continue;
         }
 
         *exit_signal = 1;
 
-        clean_memory(app_grid_size, block_size, runtime, memory_manager);//runtime.requests, memory_manager, runtime.exit_signal);
+        clean_memory(app_grid_size, block_size, runtime);
         GUARD_CU(cudaDeviceSynchronize());
         GUARD_CU(cudaPeekAtLastError());
     }
@@ -804,12 +750,11 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
     GUARD_CU((cudaError_t)cuDeviceGet(&device, device_id));
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
-    //Creat two asynchronous streams which may run concurrently with the default stream 0.
+    //Create two asynchronous streams which may run concurrently with the default stream 0.
     //The streams are not synchronized with the default stream.
     cudaStream_t gc_stream, mm_stream, app_stream;
     createStreams(gc_stream, mm_stream, app_stream);
 
-    
     int* dev_size_to_alloc;        
     int* dev_kernel_iteration_num; 
     allocManaged_(&dev_size_to_alloc, sizeof(int));
@@ -924,9 +869,8 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
                 //Timing variables
                 PerfMeasure malloc_total_sync, timing_mm, timing_gc, timing_cb;
                 for (int iteration = 0; iteration < num_iterations; ++iteration){
-
                     Runtime runtime;
-                    runtime.init(requests_num, device);
+                    runtime.init(requests_num, device, memory_manager);
 
                     printf("iteration %d\n", iteration);
 
@@ -944,8 +888,7 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
                         debug("start mm\n");
                         start_memory_manager(timing_mm, 
                                 mm_numBlocksPerSm*mm_grid_size, 
-                                block_size, mm_ctx, runtime, 
-                                memory_manager);
+                                block_size, mm_ctx, runtime);
                         debug("mm done, sync\n");
                         GUARD_CU((cudaError_t)cuCtxSynchronize());
                         GUARD_CU(cudaPeekAtLastError());
@@ -961,8 +904,7 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
                         debug("start gc\n");
                         start_garbage_collector(timing_gc, 
                                 gc_numBlocksPerSm*gc_grid_size, 
-                                block_size, gc_ctx, runtime, 
-                                memory_manager);
+                                block_size, gc_ctx, runtime);
                         debug("gc done, sync\n");
                         GUARD_CU((cudaError_t)cuCtxSynchronize());
                         GUARD_CU(cudaPeekAtLastError());
@@ -1028,7 +970,7 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
 
                     if (not kernel_complete){
                         printf("kernel is not completed, free memory which app allocated\n");
-                        clean_memory(app_grid_size, block_size, runtime, memory_manager);
+                        clean_memory(app_grid_size, block_size, runtime);
                         continue;
                     }
 
@@ -1049,7 +991,7 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
                     //Deallocate device memory
                     cuCtxSetCurrent(default_ctx);
                     GUARD_CU((cudaError_t)cuCtxSetCurrent(default_ctx));
-                    clean_memory(app_grid_size, block_size, runtime, memory_manager);
+                    clean_memory(app_grid_size, block_size, runtime);
 
                     GUARD_CU(cudaDeviceSynchronize());
                     GUARD_CU(cudaPeekAtLastError());
