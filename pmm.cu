@@ -151,7 +151,7 @@ void app_one_per_warp_test(int* size_to_alloc,
     __threadfence();
 }
 
-//consumer
+/*//consumer
 __global__
 void app_async_one_per_warp_test(int* size_to_alloc,
                                  int* iter_num,
@@ -176,7 +176,7 @@ void app_async_one_per_warp_test(int* size_to_alloc,
         if (lane_id == 0){
             runtime.malloc_async((volatile int**)&ptr_tab[warp_id], 32*size_to_alloc[0]);
             //runtime.malloc_async(future_ptr, 32*size_to_alloc[0]);
-            /** copied from request **/
+            // copied from request 
             // wait for request to be completed
             while (runtime.is_working()){
                 if (runtime.is_finished(thid)){
@@ -185,7 +185,7 @@ void app_async_one_per_warp_test(int* size_to_alloc,
                 }
                 __threadfence();
             }
-            /* copied from request - end**/
+            // copied from request - end
             //assert(ptr_tab[warp_id]);
         }
         __threadfence();
@@ -200,7 +200,7 @@ void app_async_one_per_warp_test(int* size_to_alloc,
         __syncthreads();
         if (lane_id == 0){
             runtime.free_async((volatile int**)&ptr_tab[warp_id]);
-            /** copied from request **/
+            // copied from request 
             // wait for request to be completed
             while (runtime.is_working()){
                 if (runtime.is_finished(thid)){
@@ -209,9 +209,46 @@ void app_async_one_per_warp_test(int* size_to_alloc,
                 }
                 __threadfence();
             }
-            /** copied from request - end**/
+            // copied from request - end
         }
         __threadfence();
+    }
+    atomicAdd((int*)(runtime.exit_counter), 1);
+    __threadfence();
+}*/
+
+//consumer
+__global__
+void app_async_one_per_warp_test(int* size_to_alloc,
+                                 int* iter_num,
+                                 int MONO,
+                                 Runtime runtime){
+
+    int thid = blockDim.x * blockIdx.x + threadIdx.x;
+    int warp_id = threadIdx.x/32;
+    __shared__ Future future_tmp[32];
+
+    for (int i=0; i<iter_num[0]; ++i){
+        // ALLOC
+        runtime.malloc_warp_async(future_tmp[warp_id], size_to_alloc[0]);
+        __threadfence();
+        __syncthreads();
+        volatile int* new_ptr = future_tmp[warp_id].get_async(size_to_alloc[0]);
+        __threadfence();
+         
+        assert(new_ptr);
+
+        // WRITE
+        new_ptr[0] = thid;
+        __threadfence();
+
+        // READ
+        assert(new_ptr[0] == thid);
+       
+        // RECLAMATION
+        runtime.free_warp_async(future_tmp[warp_id]);
+        if (threadIdx.x%32 == 0)
+            runtime.wait((request_type)FREE, thid, &(future_tmp[warp_id].ptr));
     }
     atomicAdd((int*)(runtime.exit_counter), 1);
     __threadfence();
@@ -242,7 +279,7 @@ void app_async_request_test(int* size_to_alloc,
 
         // MEMORY RECLAMATION
         __threadfence();
-        runtime.free_async(future_ptr);;
+        runtime.free_async(future_ptr);
         __threadfence();
         runtime.wait((request_type)FREE, thid, &future_ptr.ptr);
     }
@@ -472,7 +509,6 @@ void start_application(int type,
         void* args[] = {&dev_size_to_alloc, &dev_iter_num, &mono, &runtime};
         //GUARD_CU(cudaProfilerStart());
         timing_sync.startMeasurement();
-        //GUARD_CU(cudaLaunchKernel((void*)app_async_request_test, grid_size, block_size, args, 0, 0));
         GUARD_CU(cudaLaunchCooperativeKernel((void*)app_async_one_per_warp_test, grid_size, block_size, args));
         GUARD_CU((cudaError_t)cuCtxSynchronize());
         GUARD_CU(cudaPeekAtLastError());

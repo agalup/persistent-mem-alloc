@@ -242,6 +242,7 @@ struct Runtime{
     }
     __device__ void malloc(volatile int**, size_t);
     __device__ void malloc_warp(volatile int**, volatile int**, size_t);
+    __device__ void malloc_warp_async(Future&, size_t);
     __device__ void malloc_async(volatile int**, size_t);
     __device__ void malloc_async(Future&, size_t);
 
@@ -249,6 +250,7 @@ struct Runtime{
     __device__ void free_warp(volatile int*);
     __device__ void free_async(volatile int**);
     __device__ void free_async(Future&);
+    __device__ void free_warp_async(Future&);
 
     __device__ void request(request_type, volatile int**, int);
     __device__ void request_async(request_type, volatile int**, int);
@@ -261,12 +263,14 @@ struct Runtime{
 
 void Runtime::wait(request_type type, int thid, volatile int** new_ptr){
     // wait for request to be completed
-    while (is_working()){
-        if (is_finished(thid)){
-            request_processed(type, new_ptr);
-            break;
+    if (not is_finished(thid)){
+        while (is_working()){
+            if (is_finished(thid)){
+                request_processed(type, new_ptr);
+                break;
+            }
+            __threadfence();
         }
-        __threadfence();
     }
 }
 
@@ -276,20 +280,8 @@ struct Future{
     Runtime* runtime;
     request_type type;
 
-    __device__
-    volatile int* get(){
-        runtime->wait(type, thid, &ptr);
-        return ptr;
-        /*
-        while (runtime->is_working()){
-            if (runtime->is_finished(thid)){
-                runtime->request_processed((request_type)MALLOC, &ptr);
-                break;
-            }
-            __threadfence();
-        }
-        */
-    }
+    __device__ volatile int* get();
+    __device__ volatile int* get_async(size_t);
 };
 
 void Runtime::init(size_t APP_threads_number, CUdevice device, MemoryManagerType& memory_manager){
@@ -548,6 +540,23 @@ void Runtime::free_warp(volatile int* ptr){
 }
 
 __device__
+volatile int* Future::get(){
+    runtime->wait(type, thid, &ptr);
+    return ptr;
+}
+
+__device__
+volatile int* Future::get_async(size_t size){
+    int lane_id = threadIdx.x%32;
+    int offset = lane_id * size;
+    if (lane_id == 0){
+        runtime->wait(type, thid, &ptr);
+    }
+    __syncthreads();
+    return (volatile int*)(((volatile char*)ptr) + offset);
+}
+
+__device__
 void Runtime::malloc_warp(volatile int** ptr, volatile int** tmp, size_t size){
     int warp_id = threadIdx.x/32;
     int lane_id = threadIdx.x%32;
@@ -561,16 +570,24 @@ void Runtime::malloc_warp(volatile int** ptr, volatile int** tmp, size_t size){
     *ptr = (volatile int*)(((volatile char*)*tmp) + offset);
 }
 
-/*__device__
-void Runtime::malloc_async_warp(Future& ptr, size_t size){
-    int thid = threadIdx.x + blockIdx.x * blockDim.x;
-    int warp_id = threadIdx.x/32;
+__device__
+void Runtime::malloc_warp_async(Future& future_tmp, size_t size){
     int lane_id = threadIdx.x%32;
     if (lane_id == 0){
-        request((request_type)MALLOC, &ptr.ptr, size);
+        malloc_async(future_tmp, 32*size);
+        __threadfence();
     }
     __syncthreads();
-}*/
+}
+
+__device__
+void Runtime::free_warp_async(Future& future_tmp){
+    int lane_id = threadIdx.x%32;
+    if (lane_id == 0){
+        free_async(&(future_tmp.ptr));
+        __threadfence();
+    }
+}
 
 __device__
 void Runtime::malloc_async(volatile int** ptr, size_t size){
@@ -583,6 +600,7 @@ void Runtime::malloc_async(Future& tab, size_t size){
     tab.thid = blockDim.x * blockIdx.x + threadIdx.x;
     tab.runtime = this;
     tab.type = (request_type)MALLOC;
+    //tab.size = size;
     request_async((request_type)MALLOC, &tab.ptr, size);
 }
 
@@ -604,34 +622,5 @@ void Runtime::free_async(Future& future){
     Size - the number of threads assigned to the application
            One reqeust per thread at a time
  */
-/*
-__global__
-void copy(int** d_memory0, int* d_memory, int size){
-    int thid = blockIdx.x * blockDim.x + threadIdx.x;
-    d_memory[thid] = d_memory0[thid][0];
-}
-
-//mem test
-void mem_test(int** d_memory0, int requests_num, int blocks, int threads){
-    //create array
-    int* d_memory{nullptr};
-    GUARD_CU(cudaMalloc(&d_memory, sizeof(int) * requests_num));
-    GUARD_CU(cudaPeekAtLastError());
-    copy<<<blocks, threads>>>(d_memory0, d_memory, requests_num);
-    GUARD_CU(cudaStreamSynchronize(0));
-    GUARD_CU(cudaPeekAtLastError());
-    int* h_memory = (int*)std::malloc(requests_num* sizeof(int));
-    GUARD_CU(cudaMemcpy(h_memory, d_memory, sizeof(int)*requests_num, cudaMemcpyDeviceToHost));
-    GUARD_CU(cudaStreamSynchronize(0));
-    GUARD_CU(cudaPeekAtLastError());
-}
-
-__global__
-void test2(volatile int** d_memory, int size){
-    int thid = blockDim.x * blockIdx.x + threadIdx.x;
-    if (thid < size){
-        assert(d_memory[thid] == NULL);
-    }
-}*/
 }
 #endif
