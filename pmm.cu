@@ -231,8 +231,8 @@ void app_async_one_per_warp_test(int* size_to_alloc,
     for (int i=0; i<iter_num[0]; ++i){
         // ALLOC
         runtime.malloc_warp_async(future_tmp[warp_id], size_to_alloc[0]);
-        __threadfence();
-        __syncthreads();
+ //       __threadfence();
+        //__syncthreads();
         volatile int* new_ptr = future_tmp[warp_id].get_async(size_to_alloc[0]);
         __threadfence();
          
@@ -439,7 +439,7 @@ void clean_memory(uint32_t grid_size,
 
     GUARD_CU(cudaPeekAtLastError());
     GUARD_CU(cudaDeviceSynchronize());
-    runtime.requests->free();
+    runtime.free();
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
 }
@@ -1038,6 +1038,7 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
                 GUARD_CU((cudaError_t)cuCtxDestroy(app_ctx));
                 GUARD_CU((cudaError_t)cuCtxDestroy(gc_ctx));
                 GUARD_CU((cudaError_t)cuCtxDestroy(mm_ctx));
+                GUARD_CU((cudaError_t)cuCtxDestroy(cb_ctx));
                 GUARD_CU((cudaError_t)cuCtxSetCurrent(default_ctx));
                 GUARD_CU(cudaDeviceSynchronize());
                 GUARD_CU(cudaPeekAtLastError());

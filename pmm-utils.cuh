@@ -194,10 +194,17 @@ struct Service{
 
     //HOST
     void init(CUdevice device);
+    void free();
     __forceinline__ int is_running(){ return started[0]; }
     //DEVICE
     __forceinline__ __device__ void start(){ *started = 1; }
 };
+
+void Service::free(){
+    GUARD_CU(cudaFree((void*)started));
+    GUARD_CU(cudaDeviceSynchronize());
+    GUARD_CU(cudaPeekAtLastError());
+}
 
 void Service::init(CUdevice device){
     GUARD_CU(cudaMallocManaged(&started, sizeof(uint32_t)));
@@ -325,8 +332,17 @@ void Runtime::init(size_t APP_threads_number, CUdevice device, MemoryManagerType
 }
 
 void Runtime::free(){
+    mm->free();
+    gc->free();
+    cb->free();
+    requests->free();
+    //mem_manager.free() ???
     GUARD_CU(cudaFree((void*)exit_signal));
     GUARD_CU(cudaFree((void*)exit_counter));
+    GUARD_CU(cudaFree((void*)mm));
+    GUARD_CU(cudaFree((void*)gc));
+    GUARD_CU(cudaFree((void*)cb));
+    GUARD_CU(cudaFree((void*)requests));
 
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
@@ -431,7 +447,7 @@ void Runtime::request(request_type type,
 }
 
 __device__
-void Runtime::_request_processing(int request_id/*, MemoryManagerType* mm*/){
+void Runtime::_request_processing(int request_id){
     
     debug("request processing!\n");
 
