@@ -110,6 +110,8 @@ __forceinline__ __device__ unsigned sm_id()
 }
 
 struct Runtime;
+struct Future;
+struct Service;
 
 struct RequestType{
     volatile size_t* requests_number; 
@@ -205,34 +207,6 @@ void Service::init(CUdevice device){
     GUARD_CU(cudaPeekAtLastError());
 }
 
-struct Future{
-    volatile int* ptr;
-    int thid;
-    Runtime* runtime;
-    request_type type;
-
-    __device__ volatile int* get();
-    __device__ volatile int* get_async(size_t);
-};
-
-__device__
-volatile int* Future::get(){
-    runtime->wait(type, thid, &ptr);
-    __threadfence();
-    return ptr;
-}
-
-__device__
-volatile int* Future::get_async(size_t size){
-    int lane_id = threadIdx.x%32;
-    int offset = lane_id * size;
-    if (lane_id == 0){
-        runtime->wait(type, thid, &ptr);
-    }
-    __threadfence();
-    __syncthreads();
-    return (volatile int*)(((volatile char*)ptr) + offset);
-}
 
 struct Runtime{
     int app_threads_num;
@@ -287,6 +261,34 @@ struct Runtime{
     __device__ void wait(request_type, int, volatile int** new_ptr);
 };
 
+struct Future{
+    volatile int* ptr;
+    int thid;
+    Runtime* runtime;
+    request_type type;
+
+    __device__ volatile int* get();
+    __device__ volatile int* get_async(size_t);
+};
+
+__device__
+volatile int* Future::get(){
+    runtime->wait(type, thid, &ptr);
+    __threadfence();
+    return ptr;
+}
+
+__device__
+volatile int* Future::get_async(size_t size){
+    int lane_id = threadIdx.x%32;
+    int offset = lane_id * size;
+    if (lane_id == 0){
+        runtime->wait(type, thid, &ptr);
+    }
+    __threadfence();
+    __syncthreads();
+    return (volatile int*)(((volatile char*)ptr) + offset);
+}
 __device__
 void Runtime::wait(request_type type, int thid, volatile int** new_ptr){
     // wait for request to be completed
@@ -464,7 +466,7 @@ void Runtime::_request_processing(int request_id){
     auto addr_id = requests->request_id[request_id];
     int request_status;
     
-    switch (requests->request_signal[request_id]){
+    switch (requests->type(request_id)){
         case MALLOC:
             if (addr_id == -1){
                 addr_id = atomicAdd((int*)&(requests->request_counter[0]), 1);
