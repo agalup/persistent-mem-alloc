@@ -78,7 +78,6 @@ cudaError_t GRError(cudaError_t error, const char *message,
 
 __device__ void acquire_semaphore(volatile int* lock, int i){
     while (atomicCAS((int*)&lock[i], 0, 1) != 0){
-        //printf("acq semaphore: thread %d\n", threadIdx.x);
     }
     __threadfence();
 }
@@ -110,17 +109,7 @@ __forceinline__ __device__ unsigned sm_id()
     return ret;
 }
 
-void allocManaged(volatile int** ptr, size_t size){
-    GUARD_CU(cudaMallocManaged(ptr, size));
-    GUARD_CU(cudaPeekAtLastError());
-    GUARD_CU(cudaDeviceSynchronize());
-}
-
-void allocManaged_(int** ptr, size_t size){
-    GUARD_CU(cudaMallocManaged(ptr, size));
-    GUARD_CU(cudaPeekAtLastError());
-    GUARD_CU(cudaDeviceSynchronize());
-}
+struct Runtime;
 
 struct RequestType{
     volatile size_t* requests_number; 
@@ -216,7 +205,34 @@ void Service::init(CUdevice device){
     GUARD_CU(cudaPeekAtLastError());
 }
 
-struct Future;
+struct Future{
+    volatile int* ptr;
+    int thid;
+    Runtime* runtime;
+    request_type type;
+
+    __device__ volatile int* get();
+    __device__ volatile int* get_async(size_t);
+};
+
+__device__
+volatile int* Future::get(){
+    runtime->wait(type, thid, &ptr);
+    __threadfence();
+    return ptr;
+}
+
+__device__
+volatile int* Future::get_async(size_t size){
+    int lane_id = threadIdx.x%32;
+    int offset = lane_id * size;
+    if (lane_id == 0){
+        runtime->wait(type, thid, &ptr);
+    }
+    __threadfence();
+    __syncthreads();
+    return (volatile int*)(((volatile char*)ptr) + offset);
+}
 
 struct Runtime{
     int app_threads_num;
@@ -231,17 +247,21 @@ struct Runtime{
     //HOST
     void init(size_t Size, CUdevice device, MemoryManagerType&);
     void free();
-    __forceinline__ void stop(){ *exit_signal = 1; }
+    __forceinline__ void stop(){ 
+        *exit_signal = 1; 
+        }
 
     //DEVICE
-    __forceinline__ __device__ size_t size(){ return requests->requests_number[0]; }
-    __forceinline__ __device__ volatile int is_working(){ 
+    __forceinline__ __device__ size_t size(){ 
+        return requests->requests_number[0]; 
+        }
+    __forceinline__ __device__ int is_working(){ 
         return (! exit_signal[0]); 
         }
-    __forceinline__ __device__ volatile int is_available(int thid){ 
+    __forceinline__ __device__ int is_available(int thid){ 
         return (requests->request_signal[thid] == request_empty); 
         }
-    __forceinline__ __device__ volatile int is_finished(int thid){ 
+    __forceinline__ __device__ int is_finished(int thid){ 
         return (requests->request_signal[thid] == request_done); 
         }
     __forceinline__ __device__ int type(int thid){
@@ -263,39 +283,28 @@ struct Runtime{
     __device__ void request_async(request_type, volatile int**, int);
     __device__ void post_request(request_type, int);
     __device__ void request_processed(request_type, volatile int**);
-    __device__ void _request_processing(int/*, MemoryManagerType* */); 
+    __device__ void _request_processing(int); 
     __device__ void wait(request_type, int, volatile int** new_ptr);
 };
 
-
+__device__
 void Runtime::wait(request_type type, int thid, volatile int** new_ptr){
     // wait for request to be completed
-    if (not is_finished(thid)){
-        while (is_working()){
-            if (is_finished(thid)){
-                request_processed(type, new_ptr);
-                break;
-            }
-            __threadfence();
+    while (is_working()){
+        if (is_finished(thid)){
+            request_processed(type, new_ptr);
+            break;
         }
     }
+    __threadfence();
+    assert(*new_ptr);
 }
-
-struct Future{
-    volatile int* ptr;
-    int thid;
-    Runtime* runtime;
-    request_type type;
-
-    __device__ volatile int* get();
-    __device__ volatile int* get_async(size_t);
-};
 
 void Runtime::init(size_t APP_threads_number, CUdevice device, MemoryManagerType& memory_manager){
     app_threads_num = APP_threads_number;
-    allocManaged(&exit_signal, sizeof(int32_t));
-    allocManaged(&exit_counter, sizeof(uint32_t));
-
+    
+    GUARD_CU(cudaMallocManaged(&exit_signal, sizeof(int32_t)));
+    GUARD_CU(cudaMallocManaged(&exit_counter, sizeof(uint32_t)));
     GUARD_CU(cudaMallocManaged(&mm, sizeof(Service)));
     GUARD_CU(cudaMallocManaged(&gc, sizeof(Service)));
     GUARD_CU(cudaMallocManaged(&cb, sizeof(Service)));
@@ -322,13 +331,10 @@ void Runtime::init(size_t APP_threads_number, CUdevice device, MemoryManagerType
     GUARD_CU((cudaError_t)cudaMemPrefetchAsync((Service*)cb, sizeof(Service), device, NULL));
     GUARD_CU((cudaError_t)cudaMemPrefetchAsync((RequestType*)requests, sizeof(RequestType), device, NULL));
 
-
     mem_manager = memory_manager.getDeviceMemoryManager();
 
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
-
-    printf("request addr %x\n", requests);
 }
 
 void Runtime::free(){
@@ -336,7 +342,6 @@ void Runtime::free(){
     gc->free();
     cb->free();
     requests->free();
-    //mem_manager.free() ???
     GUARD_CU(cudaFree((void*)exit_signal));
     GUARD_CU(cudaFree((void*)exit_counter));
     GUARD_CU(cudaFree((void*)mm));
@@ -366,8 +371,7 @@ void Runtime::post_request(request_type type, int size_to_alloc){
 }
 
 __device__
-void Runtime::request_processed(request_type type,
-                      volatile int** dest){
+void Runtime::request_processed(request_type type, volatile int** dest){
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
     int req_id = -1;
     // SEMAPHORE
@@ -383,9 +387,10 @@ void Runtime::request_processed(request_type type,
                 if (requests->d_memory[req_id][0] != 0)
                     printf("d_memory[%d] = %d\n", req_id, requests->d_memory[req_id][0]);
                 //assert(d_memory[req_id][0] == 0);
-                assert(*dest != NULL);
+                assert(*dest);
                 assert(requests->request_dest[thid] == *dest);
             }
+            assert(*dest);
             break;
         case FREE:
             //assert(d_memory[req_id] == NULL);
@@ -453,87 +458,59 @@ void Runtime::_request_processing(int request_id){
 
     // SEMAPHORE
     acquire_semaphore((int*)(requests->lock), request_id);
-    debug("MEM MANAGER %s: thid %d, block ID %d, warp ID %d, lane ID %d, sm ID %d\n", __FUNCTION__, request_id, blockIdx.x, warp_id(), lane_id(), sm_id());
+    debug("MEM MANAGER %s: thid %d, block ID %d, warp ID %d, lane ID %d, sm ID %d\n", 
+            __FUNCTION__, request_id, blockIdx.x, warp_id(), lane_id(), sm_id());
     
     auto addr_id = requests->request_id[request_id];
     int request_status;
     
     switch (requests->request_signal[request_id]){
-    //switch (type(request_id)){
         case MALLOC:
             if (addr_id == -1){
-                //addr_id = atomicAdd((int*)&requests.request_counter[0], 1);
                 addr_id = atomicAdd((int*)&(requests->request_counter[0]), 1);
-                //requests.request_id[request_id] = addr_id;
                 requests->request_id[request_id] = addr_id;
             }else{
-                printf("addr_id %d\n", addr_id);
-               // assert(requests.d_memory[addr_id] == NULL);
                 assert(requests->d_memory[addr_id] == NULL);
             }
             __threadfence();
-            //requests.d_memory[addr_id] = reinterpret_cast<volatile int*>
             requests->d_memory[addr_id] = reinterpret_cast<volatile int*>
-                //(mm->malloc(4+requests->request_mem_size[request_id]));
                 (mem_manager->malloc(4+requests->request_mem_size[request_id]));
             __threadfence();
-            //assert(requests.d_memory[addr_id]);
             assert(requests->d_memory[addr_id]);
-            //requests.d_memory[addr_id][0] = 0;
             requests->d_memory[addr_id][0] = 0;
-            //requests.request_dest[request_id] = &requests.d_memory[addr_id][1];
             requests->request_dest[request_id] = &(requests->d_memory[addr_id][1]);
-            //atomicExch((int*)&requests.request_signal[request_id], request_done);
             atomicExch((int*)&(requests->request_signal[request_id]), request_done);
-            //if (requests.d_memory[addr_id][0] != 0)
             if (requests->d_memory[addr_id][0] != 0)
-                //printf("d_memory{%d} = %d\n", addr_id, requests.d_memory[addr_id][0]);
                 printf("d_memory{%d} = %d\n", addr_id, requests->d_memory[addr_id][0]);
-            //assert(requests.d_memory[addr_id][0] == 0);
             assert(requests->d_memory[addr_id][0] == 0);
             __threadfence();
             break;
 
         case FREE:
-            //assert(requests.d_memory[addr_id]);
             assert(requests->d_memory[addr_id]);
-            //if (requests.d_memory[addr_id][0] != 0)
             if (requests->d_memory[addr_id][0] != 0)
-                //printf("d_memory{%d} = %d\n", addr_id, requests.d_memory[addr_id][0]);
                 printf("d_memory{%d} = %d\n", addr_id, requests->d_memory[addr_id][0]);
-            //assert(requests.d_memory[addr_id][0] == 0);
             assert(requests->d_memory[addr_id][0] == 0);
-            //request_status = requests.d_memory[addr_id][0] - 1;
             request_status = requests->d_memory[addr_id][0] - 1;
-            //requests.d_memory[addr_id][0] -= 1;
             requests->d_memory[addr_id][0] -= 1;
-            //requests.request_dest[request_id] = NULL;
             requests->request_dest[request_id] = NULL;
-            //assert(requests.d_memory[addr_id][0] == -1);
             assert(requests->d_memory[addr_id][0] == -1);
             if (request_status < 0){
-                //atomicExch((int*)&requests.request_signal[request_id], request_gc);
                 atomicExch((int*)&(requests->request_signal[request_id]), request_gc);
             }else{
                 assert(1);
                 printf("should not be here!\n");
-                //atomicExch((int*)&requests.request_signal[request_id], request_done);
                 atomicExch((int*)&requests->request_signal[request_id], request_done);
             }
             break;
 
         case GC:
-            //assert(requests.d_memory[addr_id]);
-            //assert(requests.d_memory[addr_id][0] == -1);
             assert(requests->d_memory[addr_id]);
             assert(requests->d_memory[addr_id][0] == -1);
             __threadfence();
-            //mm->free((void*)requests->d_memory[addr_id]);
             mem_manager->free((void*)requests->d_memory[addr_id]);
             __threadfence();
-            //requests.d_memory[addr_id] = NULL;
             requests->d_memory[addr_id] = NULL;
-            //atomicExch((int*)&requests.request_signal[request_id], request_done);
             atomicExch((int*)&requests->request_signal[request_id], request_done);
             break;
 
@@ -541,7 +518,6 @@ void Runtime::_request_processing(int request_id){
             printf("request processing fail\n");
 
     }
-    //release_semaphore((int*)requests.lock, request_id);
     release_semaphore((int*)(requests->lock), request_id);
     // SEMAPHORE
 }
@@ -556,53 +532,34 @@ void Runtime::free_warp(volatile int* ptr){
 }
 
 __device__
-volatile int* Future::get(){
-    runtime->wait(type, thid, &ptr);
-    return ptr;
-}
-
-__device__
-volatile int* Future::get_async(size_t size){
-    int lane_id = threadIdx.x%32;
-    int offset = lane_id * size;
-    if (lane_id == 0){
-        runtime->wait(type, thid, &ptr);
-    }
-    __syncthreads();
-    return (volatile int*)(((volatile char*)ptr) + offset);
-}
-
-__device__
 void Runtime::malloc_warp(volatile int** ptr, volatile int** tmp, size_t size){
-    int warp_id = threadIdx.x/32;
     int lane_id = threadIdx.x%32;
     int offset = lane_id * size;
     *tmp = NULL;
     if (lane_id == 0){
         malloc(tmp, 32*size);
-        __threadfence();
     }
+    __threadfence();
     __syncthreads();
     *ptr = (volatile int*)(((volatile char*)*tmp) + offset);
 }
 
 __device__
 void Runtime::malloc_warp_async(Future& future_tmp, size_t size){
-    int lane_id = threadIdx.x%32;
-    if (lane_id == 0){
+    if (threadIdx.x%32 == 0){
         malloc_async(future_tmp, 32*size);
-        __threadfence();
     }
+    __threadfence();
     __syncthreads();
 }
 
 __device__
 void Runtime::free_warp_async(Future& future_tmp){
-    int lane_id = threadIdx.x%32;
-    if (lane_id == 0){
+    if (threadIdx.x%32 == 0){
         free_async(&(future_tmp.ptr));
-        __threadfence();
     }
+    __threadfence();
+    __syncthreads();
 }
 
 __device__
@@ -616,8 +573,8 @@ void Runtime::malloc_async(Future& tab, size_t size){
     tab.thid = blockDim.x * blockIdx.x + threadIdx.x;
     tab.runtime = this;
     tab.type = (request_type)MALLOC;
-    //tab.size = size;
     request_async((request_type)MALLOC, &tab.ptr, size);
+    __threadfence();
 }
 
 __forceinline__ __device__
@@ -634,9 +591,8 @@ __device__
 void Runtime::free_async(Future& future){
     request_async((request_type)FREE, &future.ptr, 0);
 }
-/*
-    Size - the number of threads assigned to the application
-           One reqeust per thread at a time
- */
+
+
+
 }
 #endif
