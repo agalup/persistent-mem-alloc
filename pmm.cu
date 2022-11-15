@@ -117,6 +117,34 @@ void mono_app_test(volatile int** d_memory,
 }
 
 __global__
+void app_one_per_block_test(int* size_to_alloc,
+                            int* iter_num,
+                            int MONO,
+                            Runtime runtime){
+
+    int thid = blockDim.x * blockIdx.x + threadIdx.x;
+    __shared__ int* ptr_tab;
+    
+    for (int i=0; i<iter_num[0]; ++i){
+        // ALLOCTAION
+        volatile int* new_ptr = NULL;
+        runtime.malloc_block((volatile int**)&new_ptr, (volatile int**)&ptr_tab, size_to_alloc[0]);
+        assert(new_ptr);
+
+        // WRITE
+        new_ptr[0] = thid;
+
+        // READ
+        assert(new_ptr[0] == thid);
+        
+        // RECLAMATION
+        runtime.free_block(new_ptr);
+    }
+    atomicAdd((int*)(runtime.exit_counter), 1);
+    __threadfence();
+}
+
+__global__
 void app_one_per_warp_test(int* size_to_alloc,
                            int* iter_num,
                            int MONO,
@@ -146,6 +174,38 @@ void app_one_per_warp_test(int* size_to_alloc,
 }
 
 __global__
+void app_async_one_per_block_test(int* size_to_alloc,
+                                  int* iter_num,
+                                  int MONO,
+                                  Runtime runtime){
+
+    int thid = blockDim.x * blockIdx.x + threadIdx.x;
+    __shared__ Future future_tmp;
+
+    for (int i=0; i<iter_num[0]; ++i){
+        // ALLOC
+        runtime.malloc_block_async(future_tmp, size_to_alloc[0]);
+        volatile int* new_ptr = future_tmp.get_block_async(size_to_alloc[0]);
+        __threadfence();
+        assert(new_ptr);
+
+        // WRITE
+        new_ptr[0] = thid;
+        __threadfence();
+
+        // READ
+        assert(new_ptr[0] == thid);
+       
+        // RECLAMATION
+        runtime.free_block_async(future_tmp);
+        if (threadIdx.x == 0)
+            runtime.wait((request_type)FREE, thid, &(future_tmp.ptr));
+    }
+    atomicAdd((int*)(runtime.exit_counter), 1);
+    __threadfence();
+}
+
+__global__
 void app_async_one_per_warp_test(int* size_to_alloc,
                                  int* iter_num,
                                  int MONO,
@@ -158,7 +218,7 @@ void app_async_one_per_warp_test(int* size_to_alloc,
     for (int i=0; i<iter_num[0]; ++i){
         // ALLOC
         runtime.malloc_warp_async(future_tmp[warp_id], size_to_alloc[0]);
-        volatile int* new_ptr = future_tmp[warp_id].get_async(size_to_alloc[0]);
+        volatile int* new_ptr = future_tmp[warp_id].get_warp_async(size_to_alloc[0]);
         __threadfence();
         assert(new_ptr);
 
@@ -350,11 +410,29 @@ void start_application(int type,
         GUARD_CU(cudaPeekAtLastError());
         timing_sync.stopMeasurement();
         //GUARD_CU(cudaProfilerStop());
+    }else if (mono == one_per_block){
+        void* args[] = {&dev_size_to_alloc, &dev_iter_num, &mono, &runtime};
+        //GUARD_CU(cudaProfilerStart());
+        timing_sync.startMeasurement();
+        GUARD_CU(cudaLaunchCooperativeKernel((void*)app_one_per_block_test, grid_size, block_size, args));
+        GUARD_CU((cudaError_t)cuCtxSynchronize());
+        GUARD_CU(cudaPeekAtLastError());
+        timing_sync.stopMeasurement();
+        //GUARD_CU(cudaProfilerStop());
     }else if (mono == async_one_per_warp){
         void* args[] = {&dev_size_to_alloc, &dev_iter_num, &mono, &runtime};
         //GUARD_CU(cudaProfilerStart());
         timing_sync.startMeasurement();
         GUARD_CU(cudaLaunchCooperativeKernel((void*)app_async_one_per_warp_test, grid_size, block_size, args));
+        GUARD_CU((cudaError_t)cuCtxSynchronize());
+        GUARD_CU(cudaPeekAtLastError());
+        timing_sync.stopMeasurement();
+        //GUARD_CU(cudaProfilerStop());
+    }else if (mono == async_one_per_block){
+        void* args[] = {&dev_size_to_alloc, &dev_iter_num, &mono, &runtime};
+        //GUARD_CU(cudaProfilerStart());
+        timing_sync.startMeasurement();
+        GUARD_CU(cudaLaunchCooperativeKernel((void*)app_async_one_per_block_test, grid_size, block_size, args));
         GUARD_CU((cudaError_t)cuCtxSynchronize());
         GUARD_CU(cudaPeekAtLastError());
         timing_sync.stopMeasurement();
@@ -834,11 +912,17 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
                 case one_per_warp:
                     printf("One per warp. "); 
                     break;
+                case one_per_block:
+                    printf("One per block.");
+                    break;
                 case async_request:
                     printf("Async request. "); 
                     break;
                 case async_one_per_warp:
                     printf("Async one per warp. ");
+                    break;
+                case async_one_per_block:
+                    printf("Async one per block.");
                     break;
                 default:
                     printf("MPS service. "); 

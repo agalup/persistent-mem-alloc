@@ -43,12 +43,14 @@ extern "C"{
 #define FREE        5
 #define GC          7
 
-#define MPS                0
-#define MPS_mono           1
-#define simple_mono        2
-#define one_per_warp       3
-#define async_request      4
-#define async_one_per_warp 5
+#define MPS                 0
+#define MPS_mono            1
+#define simple_mono         2
+#define one_per_warp        3
+#define one_per_block       4
+#define async_request       5
+#define async_one_per_warp  6
+#define async_one_per_block 7
 
 enum request_type {
     request_empty       = EMPTY,
@@ -243,15 +245,19 @@ struct Runtime{
     }
     __device__ void malloc(volatile int**, size_t);
     __device__ void malloc_warp(volatile int**, volatile int**, size_t);
+    __device__ void malloc_block(volatile int**, volatile int**, size_t);
     __device__ void malloc_warp_async(Future&, size_t);
+    __device__ void malloc_block_async(Future&, size_t);
     __device__ void malloc_async(volatile int**, size_t);
     __device__ void malloc_async(Future&, size_t);
 
     __device__ void free(volatile int*);
     __device__ void free_warp(volatile int*);
+    __device__ void free_block(volatile int*);
     __device__ void free_async(volatile int**);
     __device__ void free_async(Future&);
     __device__ void free_warp_async(Future&);
+    __device__ void free_block_async(Future&);
 
     __device__ void request(request_type, volatile int**, int);
     __device__ void request_async(request_type, volatile int**, int);
@@ -268,7 +274,8 @@ struct Future{
     request_type type;
 
     __device__ volatile int* get();
-    __device__ volatile int* get_async(size_t);
+    __device__ volatile int* get_warp_async(size_t);
+    __device__ volatile int* get_block_async(size_t);
 };
 
 __device__
@@ -279,7 +286,7 @@ volatile int* Future::get(){
 }
 
 __device__
-volatile int* Future::get_async(size_t size){
+volatile int* Future::get_warp_async(size_t size){
     int lane_id = threadIdx.x%32;
     int offset = lane_id * size;
     if (lane_id == 0){
@@ -289,6 +296,18 @@ volatile int* Future::get_async(size_t size){
     __syncthreads();
     return (volatile int*)(((volatile char*)ptr) + offset);
 }
+
+__device__
+volatile int* Future::get_block_async(size_t size){
+    int offset = threadIdx.x * size;
+    if (threadIdx.x == 0){
+        runtime->wait(type, thid, &ptr);
+    }
+    __threadfence();
+    __syncthreads();
+    return (volatile int*)(((volatile char*)ptr) + offset);
+}
+
 __device__
 void Runtime::wait(request_type type, int thid, volatile int** new_ptr){
     // wait for request to be completed
@@ -533,6 +552,32 @@ void Runtime::free_warp(volatile int* ptr){
     if (threadIdx.x%32 == 0) free(ptr);
 }
 
+__forceinline__ __device__
+void Runtime::free_block(volatile int* ptr){
+    if (threadIdx.x == 0) free(ptr);
+}
+
+__device__
+void Runtime::malloc_block(volatile int** ptr, volatile int** tmp, size_t size){
+    int offset = threadIdx.x * size;
+    *tmp = NULL;
+    if (threadIdx.x == 0){
+        malloc(tmp, blockDim.x * size);
+    }
+    __threadfence();
+    __syncthreads();
+    *ptr = (volatile int*)(((volatile char*)*tmp) + offset);
+}
+
+__device__
+void Runtime::malloc_block_async(Future& future_tmp, size_t size){
+    if (threadIdx.x == 0){
+        malloc_async(future_tmp, blockDim.x * size);
+    }
+    __threadfence();
+    __syncthreads();
+}
+
 __device__
 void Runtime::malloc_warp(volatile int** ptr, volatile int** tmp, size_t size){
     int lane_id = threadIdx.x%32;
@@ -558,6 +603,15 @@ void Runtime::malloc_warp_async(Future& future_tmp, size_t size){
 __device__
 void Runtime::free_warp_async(Future& future_tmp){
     if (threadIdx.x%32 == 0){
+        free_async(&(future_tmp.ptr));
+    }
+    __threadfence();
+    __syncthreads();
+}
+
+__device__
+void Runtime::free_block_async(Future& future_tmp){
+    if (threadIdx.x == 0){
         free_async(&(future_tmp.ptr));
     }
     __threadfence();

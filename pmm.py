@@ -33,17 +33,21 @@ def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num,
 
     mono = ""
     if MONO == str(0) or MONO == 0:
-        mono = "mps_services" #"monolithic"
+        mono = "mps_services" 
     elif MONO == str(1) or MONO == 1:
-        mono = "MPS_monolithic" #"simple_mono"
+        mono = "MPS_monolithic" 
     elif MONO == str(2) or MONO == 2:
-        mono = "monolithic" #"mps_services"
+        mono = "monolithic" 
     elif MONO == str(3) or MONO == 3:
         mono = "one_per_warp"
     elif MONO == str(4) or MONO == 4:
-        mono = "async_request"
+        mono = "one_per_block"
     elif MONO == str(5) or MONO == 5:
+        mono = "async_request"
+    elif MONO == str(6) or MONO == 6:
         mono = "async_one_per_warp"
+    elif MONO == str(7) or MONO == 7:
+        mono = "async_one_per_block"
     
     print("mono = ", mono, "MONO = ", MONO)
 
@@ -201,7 +205,10 @@ def main(argv):
     print("           1 MPS_monolithic")
     print("           2 monolithic")
     print("           3 one per warp")
-    print("           4 async request")
+    print("           4 one per block")
+    print("           5 async request")
+    print("           6 one per warp async")
+    print("           7 one per block async")
     
     print("ouroboros test")
     pmm_init = ouroboros.pmm_init
