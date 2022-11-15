@@ -18,6 +18,95 @@ using namespace std;
 
 extern "C" {
 
+// Launch tests
+void mps_monolithic_app(int, int, int, size_t*, size_t, int, int*, int*, 
+                        int*, int*, float*, int*, int, int);
+
+void simple_monolithic_app(int, int, int, size_t*, size_t, int, int*, 
+                           int*, int*, int*, float*, int*, int, int);
+
+void mps_app(int, int, int, size_t*, size_t, int, int*, int*, int*, 
+             int*, float*, int*, int, int);
+
+// Servies
+// Memory Manager Service
+void start_memory_manager(PerfMeasure&, uint32_t, uint32_t, CUcontext&, Runtime&);
+__global__ void mem_manager(Runtime);
+// Garbage Collector Service
+void start_garbage_collector(PerfMeasure&, uint32_t, uint32_t, CUcontext&, Runtime&);
+__global__ void garbage_collector(Runtime);
+// Callback Service
+void start_callback_server(PerfMeasure&, uint32_t, uint32_t, CUcontext&, Runtime&);
+
+// Clean up
+void clean_memory(uint32_t, uint32_t, Runtime&);
+__global__ void mem_free(Runtime);
+
+// TESTS
+void start_application(PerfMeasure&, uint32_t, uint32_t, volatile int*, volatile int*, 
+                        int*, int*, int, bool&, Runtime&);
+__global__ void app_test(int*, int*, int, Runtime);
+__global__ void mono_app_test(volatile int**, volatile int*, int*, int*, MemoryManagerType*);
+__global__ void app_async_request_test(int*, int*, int, Runtime);
+__global__ void app_one_per_warp_test(int*, int*, int, Runtime);
+__global__ void app_async_one_per_warp_test(int*, int*, int, Runtime);
+__global__ void app_one_per_block_test(int*, int*, int, Runtime);
+__global__ void app_async_one_per_block_test(int*, int*, int, Runtime);
+
+
+/* TODO: write down the pmm_init arguments:
+ * INPUT
+ *  mono
+ *  kernel_iteration_num
+ *  size_to_alloc
+ *  ins_size
+ *  num_iterations
+ *  SMs
+ * OUTPUT
+ *  sm_app
+ *  sm_mm
+ *  sm_gc
+ *  allocs
+ *  uni_req_per_sec
+ *  array_size
+ */
+// TODO test of memory allocation of random sizes within a kernel
+void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc, 
+        size_t* ins_size, size_t num_iterations, int SMs, int* sm_app, 
+        int* sm_mm, int* sm_gc, int* allocs, float* uni_req_per_sec, 
+        int* array_size, int block_size, int device){
+
+    GUARD_CU(cudaSetDevice(device));
+
+    printf("mono %d\n", mono);
+    printf("device %d\n", device);
+
+    if (mono == MPS_mono){
+        printf("MPS_mono\n");
+
+        mps_monolithic_app(mono, kernel_iteration_num, 
+                size_to_alloc, ins_size, num_iterations, 
+                SMs, sm_app, sm_mm, sm_gc, allocs, 
+                uni_req_per_sec, array_size, block_size, device);
+
+        printf("MPS_mono\n");
+    }else if (mono == simple_mono){
+        printf("simple mono\n");
+
+        simple_monolithic_app(mono, kernel_iteration_num, 
+                size_to_alloc, ins_size, num_iterations, 
+                SMs, sm_app, sm_mm, sm_gc, allocs, 
+                uni_req_per_sec, array_size, block_size, device);
+
+        printf("simple mono\n");
+    }else{
+        mps_app(mono, kernel_iteration_num, size_to_alloc, ins_size, 
+                num_iterations, SMs, sm_app, sm_mm, sm_gc, allocs, 
+                uni_req_per_sec, array_size, block_size, device);
+    }
+}
+
+
 __global__
 void mem_free(Runtime runtime){
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
@@ -71,6 +160,8 @@ void mem_manager(Runtime runtime){
         __threadfence();
     }
 }
+
+// TESTS
 
 __global__
 void mono_app_test(volatile int** d_memory, 
@@ -359,23 +450,19 @@ void clean_memory(uint32_t grid_size,
     GUARD_CU(cudaPeekAtLastError());
 }
 
-void start_application(int type, 
-                       PerfMeasure& timing_sync, 
+void start_application(PerfMeasure& timing_sync, 
                        uint32_t grid_size,
                        uint32_t block_size, 
-                       CUcontext& ctx,
                        volatile int* exit_signal,
-                       RequestType* requests,
                        volatile int* exit_counter,
                        int* dev_size_to_alloc, 
                        int* dev_iter_num,
                        int mono, 
                        bool& kernel_complete,
-                       MemoryManagerType& memory_manager, 
                        Runtime& runtime){
-    auto dev_mm = memory_manager.getDeviceMemoryManager();
+    auto dev_mm = runtime.mem_manager;
     if (mono == MPS_mono){
-        void* args[] = {&(requests->d_memory), &exit_counter, &dev_size_to_alloc, &dev_iter_num, &dev_mm};
+        void* args[] = {&(runtime.requests->d_memory), &exit_counter, &dev_size_to_alloc, &dev_iter_num, &dev_mm};
         //GUARD_CU(cudaProfilerStart());
         timing_sync.startMeasurement();
         debug("start application: MPS mono!\n");
@@ -615,11 +702,10 @@ void mps_monolithic_app(int mono, int kernel_iteration_num, int size_to_alloc,
             //malloc_total_sync.startMeasurement();
 
             //mps_monolithic_app
-            start_application(MALLOC, malloc_total_sync, 
-                    app_grid_size, block_size, app_ctx, exit_signal,
-                    runtime.requests, exit_counter, dev_size_to_alloc, 
-                    dev_kernel_iteration_num, mono, kernel_complete, 
-                    memory_manager, runtime);
+            start_application(malloc_total_sync, app_grid_size, 
+                    block_size, exit_signal, exit_counter, 
+                    dev_size_to_alloc, dev_kernel_iteration_num, 
+                    mono, kernel_complete, runtime);
             debug("app done, sync\n");
             GUARD_CU((cudaError_t)cuCtxSynchronize());
             //malloc_total_sync.stopMeasurement();
@@ -838,14 +924,12 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
                     GUARD_CU((cudaError_t)cudaGetLastError());
                     debug("start app\n");
                     //mps_app
-                    start_application(MALLOC, malloc_total_sync, 
+                    start_application(malloc_total_sync, 
                             app_numBlocksPerSm*app_grid_size, 
-                            block_size, app_ctx, runtime.exit_signal, 
-                            runtime.requests, runtime.exit_counter, 
-                            dev_size_to_alloc, 
+                            block_size, runtime.exit_signal, 
+                            runtime.exit_counter, dev_size_to_alloc, 
                             dev_kernel_iteration_num, mono, 
-                            kernel_complete, memory_manager, 
-                            runtime);
+                            kernel_complete, runtime);
                     GUARD_CU((cudaError_t)cuCtxSynchronize());
                     GUARD_CU(cudaPeekAtLastError());
                     debug("done\n");
@@ -940,60 +1024,6 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
         }
     }
     *array_size = it;
-}
-
-/* TODO: write down the pmm_init arguments:
- * INPUT
- *  mono
- *  kernel_iteration_num
- *  size_to_alloc
- *  ins_size
- *  num_iterations
- *  SMs
- * OUTPUT
- *  sm_app
- *  sm_mm
- *  sm_gc
- *  allocs
- *  uni_req_per_sec
- *  array_size
- */
-
-
-// TODO add the device id to run tests concurrently
-void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc, 
-        size_t* ins_size, size_t num_iterations, int SMs, int* sm_app, 
-        int* sm_mm, int* sm_gc, int* allocs, float* uni_req_per_sec, 
-        int* array_size, int block_size, int device){
-
-    GUARD_CU(cudaSetDevice(device));
-
-    printf("mono %d\n", mono);
-    printf("device %d\n", device);
-
-    if (mono == MPS_mono){
-        printf("MPS_mono\n");
-
-        mps_monolithic_app(mono, kernel_iteration_num, 
-                size_to_alloc, ins_size, num_iterations, 
-                SMs, sm_app, sm_mm, sm_gc, allocs, 
-                uni_req_per_sec, array_size, block_size, device);
-
-        printf("MPS_mono\n");
-    }else if (mono == simple_mono){
-        printf("simple mono\n");
-
-        simple_monolithic_app(mono, kernel_iteration_num, 
-                size_to_alloc, ins_size, num_iterations, 
-                SMs, sm_app, sm_mm, sm_gc, allocs, 
-                uni_req_per_sec, array_size, block_size, device);
-
-        printf("simple mono\n");
-    }else{
-        mps_app(mono, kernel_iteration_num, size_to_alloc, ins_size, 
-                num_iterations, SMs, sm_app, sm_mm, sm_gc, allocs, 
-                uni_req_per_sec, array_size, block_size, device);
-    }
 }
 
 }
