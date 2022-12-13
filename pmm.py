@@ -48,6 +48,8 @@ def draw_graph(MONO, plt, testcase, alloc_per_thread, kernel_iter_num,
         mono = "async_one_per_warp"
     elif MONO == str(7) or MONO == 7:
         mono = "async_one_per_block"
+    elif MONO == str(8) or MONO == 8:
+        mono = "callback_type"
     
     print("mono = ", mono, "MONO = ", MONO)
 
@@ -209,6 +211,7 @@ def main(argv):
     print("           5 async request")
     print("           6 one per warp async")
     print("           7 one per block async")
+    print("           8 callback")
     
     print("ouroboros test")
     pmm_init = ouroboros.pmm_init

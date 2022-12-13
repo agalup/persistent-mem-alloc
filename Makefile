@@ -30,13 +30,13 @@ $(EXEC):
 	#nvcc -g -G -O0 -Xptxas -O0 -arch=sm_70 \
     #--compiler-options '-fPIC' -Xcompiler  -lcuda -lcudart -I include -I Ouroboros_origin/include -DOUROBOROS__ main.cu -o ouroboros_mm --expt-relaxed-constexpr
 
-	nvcc -g -O3 -Xptxas -O3 -arch=sm_70 --maxrregcount 32\
+	nvcc -g -O3 -Xptxas -O3 -arch=sm_70 --maxrregcount 32 \
     -lcuda -lcudart -I include -I Ouroboros_origin/include \
-    -DOUROBOROS__ main.cu -o ouroboros_mm --expt-relaxed-constexpr
+    -DOUROBOROS__ main.cu --expt-relaxed-constexpr --expt-extended-lambda -o ouroboros_mm 
 	
-	nvcc -g -O3 -Xptxas -O3 -arch=sm_70 --maxrregcount 32\
+	nvcc -g -O3 -Xptxas -O3 -arch=sm_70 --maxrregcount 32 \
     -lcuda -lcudart -I include -I Ouroboros_origin/include \
-    -DOUROBOROS__  --expt-relaxed-constexpr \
+    -DOUROBOROS__  --expt-relaxed-constexpr --expt-extended-lambda\
     --compiler-options '-fPIC' --shared pmm.cu -o ouroboros_mm.so
 
 #	nvcc -g -G -O0 -Xptxas -O0 -arch=sm_70 --resource-usage -Xptxas --warn-on-spills --maxrregcount 32 \

@@ -16,9 +16,6 @@
 
 using namespace std;
 
-
-extern "C"{
-
 //#define DEBUG
 
 #ifdef DEBUG
@@ -42,6 +39,7 @@ extern "C"{
 #define MALLOC      3
 #define FREE        5
 #define GC          7
+#define CB          11
 
 #define MPS                 0
 #define MPS_mono            1
@@ -51,6 +49,11 @@ extern "C"{
 #define async_request       5
 #define async_one_per_warp  6
 #define async_one_per_block 7
+#define callback_type       8
+
+
+//TODO:
+//New data structure for queue to link all allocated memory pointers to one within a warp.
 
 enum request_type {
     request_empty       = EMPTY,
@@ -116,11 +119,13 @@ struct Future;
 struct Service;
 
 struct RequestType{
+
     volatile size_t* requests_number; 
     volatile int* request_counter;
     volatile int* request_signal; 
     volatile int* request_id; 
     volatile int* request_mem_size;
+
     volatile int* lock;
     volatile int** d_memory;
     volatile int** request_dest;
@@ -155,7 +160,7 @@ void RequestType::memset(size_t Size){
         tab_zero[i] = 0;
         null_tab[i] = NULL;
     }
-    GUARD_CU(cudaMemcpy((void*)d_memory, (void*)null_tab, Size * sizeof(volatile int*), cudaMemcpyHostToDevice));
+    GUARD_CU(cudaMemcpy((void*)d_memory, null_tab, Size * sizeof(volatile int*), cudaMemcpyHostToDevice));
     GUARD_CU(cudaMemcpy((void*)request_dest, null_tab, Size * sizeof(volatile int*), cudaMemcpyHostToDevice));
     GUARD_CU(cudaMemcpy((void*)requests_number, &Size, sizeof(size_t), cudaMemcpyHostToDevice));
     GUARD_CU(cudaMemcpy((void*)request_counter, &zero, sizeof(int), cudaMemcpyHostToDevice));
@@ -166,6 +171,8 @@ void RequestType::memset(size_t Size){
     GUARD_CU(cudaMemcpy((void*)request_id, tab_zero, Size * sizeof(int), cudaMemcpyHostToDevice));
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
+    delete [] tab_zero;
+    delete [] null_tab;
 }
 
 void RequestType::free(){
@@ -190,7 +197,7 @@ struct Service{
     void free();
     __forceinline__ int is_running(){ return started[0]; }
     //DEVICE
-    __forceinline__ __device__ void start(){ *started = 1; }
+    __forceinline__ __host__ __device__ void start(){ *started = 1; }
 };
 
 void Service::free(){
@@ -209,14 +216,33 @@ void Service::init(CUdevice device){
     GUARD_CU(cudaPeekAtLastError());
 }
 
+typedef void(*volatile Callback_fn)(void);
+
+struct Callback{
+    Callback_fn ptr;
+
+    __device__ 
+    Callback(Callback_fn Ptr) : ptr{Ptr} {}
+
+    __device__
+    Callback& operator=(const Callback& cb){
+        ptr = cb.ptr;
+        return *this;
+    }
+};
 
 struct Runtime{
     int app_threads_num;
     volatile int* exit_signal;
     volatile int* exit_counter; 
+
+    //Services
     Service* mm;
     Service* gc;
     Service* cb;
+
+    Callback* request_callbacks;
+
     RequestType* requests;
     MemoryManagerType* mem_manager;
 
@@ -239,10 +265,12 @@ struct Runtime{
         }
     __forceinline__ __device__ int is_finished(int thid){ 
         return (requests->request_signal[thid] == request_done); 
-        }
+    }
     __forceinline__ __device__ int type(int thid){
         return (requests->request_signal[thid]);
     }
+    
+    //TODO: put it inside the MM Service
     __device__ void malloc(volatile int**, size_t);
     __device__ void malloc_warp(volatile int**, volatile int**, size_t);
     __device__ void malloc_block(volatile int**, volatile int**, size_t);
@@ -258,7 +286,14 @@ struct Runtime{
     __device__ void free_async(Future&);
     __device__ void free_warp_async(Future&);
     __device__ void free_block_async(Future&);
+    // DONE
 
+    //__device__ void callback(volatile int**, Callback lambda);
+    __device__ void callback(volatile int**, Callback* lambda);
+    __device__ void request_cb(request_type, volatile int**, Callback* lambda);
+    __device__ void post_request_cb(request_type, Callback* lambda);
+
+    //TODO: put it to the intra-communicator
     __device__ void request(request_type, volatile int**, int);
     __device__ void request_async(request_type, volatile int**, int);
     __device__ void post_request(request_type, int);
@@ -266,6 +301,7 @@ struct Runtime{
     __device__ void _request_processing(int); 
     __device__ void wait(request_type, int, volatile int** new_ptr);
 };
+
 
 struct Future{
     volatile int* ptr;
@@ -278,12 +314,14 @@ struct Future{
     __device__ volatile int* get_block_async(size_t);
 };
 
+    
 __device__
 volatile int* Future::get(){
     runtime->wait(type, thid, &ptr);
     __threadfence();
     return ptr;
 }
+
 
 __device__
 volatile int* Future::get_warp_async(size_t size){
@@ -296,6 +334,7 @@ volatile int* Future::get_warp_async(size_t size){
     __syncthreads();
     return (volatile int*)(((volatile char*)ptr) + offset);
 }
+
 
 __device__
 volatile int* Future::get_block_async(size_t size){
@@ -330,6 +369,9 @@ void Runtime::init(size_t APP_threads_number, CUdevice device, MemoryManagerType
     GUARD_CU(cudaMallocManaged(&gc, sizeof(Service)));
     GUARD_CU(cudaMallocManaged(&cb, sizeof(Service)));
     GUARD_CU(cudaMallocManaged(&requests, sizeof(RequestType)));
+
+    GUARD_CU(cudaMallocManaged((void**)&request_callbacks, app_threads_num * sizeof(Callback)));
+    for (int i=0; i<app_threads_num; ++i) request_callbacks[i].ptr = NULL;
 
     *exit_signal = 0;
     *exit_counter = 0;
@@ -369,9 +411,30 @@ void Runtime::free(){
     GUARD_CU(cudaFree((void*)gc));
     GUARD_CU(cudaFree((void*)cb));
     GUARD_CU(cudaFree((void*)requests));
+    GUARD_CU(cudaFree((void*)request_callbacks));
 
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
+}
+
+__device__
+void Runtime::post_request_cb(request_type type, Callback* callback){
+    int thid = blockDim.x * blockIdx.x + threadIdx.x;
+    // SEMAPHORE
+    __threadfence();
+    acquire_semaphore((int*)(requests->lock), thid);
+    if (type == CB){
+        //assert(callback.ptr);
+        request_callbacks[thid].ptr = callback->ptr;
+        __threadfence();
+        //assert(request_callbacks[thid].ptr);
+    }
+    // SIGNAL update
+    atomicExch((int*)&(requests->request_signal[thid]), type);
+    debug("APP %s: thid %d, block ID %d, warp ID %d, lane ID %d, sm ID %d\n", __FUNCTION__, thid, blockIdx.x, warp_id(), lane_id(), sm_id());
+    release_semaphore((int*)(requests->lock), thid);
+    __threadfence();
+    // SEMAPHORE
 }
 
 __device__
@@ -428,7 +491,7 @@ void Runtime::request_processed(request_type type, volatile int** dest){
     __threadfence();
     // SEMAPHORE
 }
-
+    
 __device__
 void Runtime::request_async(request_type type,
                             volatile int** dest,
@@ -446,6 +509,29 @@ void Runtime::request_async(request_type type,
     // do not wait request to be completed
 }
 
+__device__
+void Runtime::callback(volatile int** ptr, Callback* function){
+    //assert(function.ptr);
+    request_cb((request_type)CB, ptr, function);
+}
+
+__device__
+void Runtime::request_cb(request_type type,
+                      volatile int** dest,
+                      Callback* callback){
+    int thid = blockDim.x * blockIdx.x + threadIdx.x;
+    // wait for request to be posted
+    while (is_working()){
+        if (is_available(thid)){
+            //assert(callback.ptr);
+            post_request_cb(type, callback);
+            break;
+        }
+        __threadfence();
+    }
+    __threadfence();
+}
+    
 __device__
 void Runtime::request(request_type type,
                       volatile int** dest,
@@ -471,12 +557,11 @@ void Runtime::request(request_type type,
     }
     __threadfence();
 }
-
+    
 __device__
 void Runtime::_request_processing(int request_id){
     
     debug("request processing!\n");
-
     // SEMAPHORE
     acquire_semaphore((int*)(requests->lock), request_id);
     debug("MEM MANAGER %s: thid %d, block ID %d, warp ID %d, lane ID %d, sm ID %d\n", 
@@ -535,6 +620,9 @@ void Runtime::_request_processing(int request_id){
             atomicExch((int*)&requests->request_signal[request_id], request_done);
             break;
 
+        case CB:
+            //assert(request_callbacks[request_id]);
+
         default:
             printf("request processing fail\n");
 
@@ -542,21 +630,25 @@ void Runtime::_request_processing(int request_id){
     release_semaphore((int*)(requests->lock), request_id);
     // SEMAPHORE
 }
+
 __device__
 void Runtime::malloc(volatile int** ptr, size_t size){
     request((request_type)MALLOC, ptr, size);
 }
+
 
 __forceinline__ __device__
 void Runtime::free_warp(volatile int* ptr){
     if (threadIdx.x%32 == 0) free(ptr);
 }
 
+    
 __forceinline__ __device__
 void Runtime::free_block(volatile int* ptr){
     if (threadIdx.x == 0) free(ptr);
 }
 
+    
 __device__
 void Runtime::malloc_block(volatile int** ptr, volatile int** tmp, size_t size){
     int offset = threadIdx.x * size;
@@ -569,6 +661,7 @@ void Runtime::malloc_block(volatile int** ptr, volatile int** tmp, size_t size){
     *ptr = (volatile int*)(((volatile char*)*tmp) + offset);
 }
 
+    
 __device__
 void Runtime::malloc_block_async(Future& future_tmp, size_t size){
     if (threadIdx.x == 0){
@@ -578,6 +671,7 @@ void Runtime::malloc_block_async(Future& future_tmp, size_t size){
     __syncthreads();
 }
 
+    
 __device__
 void Runtime::malloc_warp(volatile int** ptr, volatile int** tmp, size_t size){
     int lane_id = threadIdx.x%32;
@@ -591,6 +685,7 @@ void Runtime::malloc_warp(volatile int** ptr, volatile int** tmp, size_t size){
     *ptr = (volatile int*)(((volatile char*)*tmp) + offset);
 }
 
+    
 __device__
 void Runtime::malloc_warp_async(Future& future_tmp, size_t size){
     if (threadIdx.x%32 == 0){
@@ -600,6 +695,7 @@ void Runtime::malloc_warp_async(Future& future_tmp, size_t size){
     __syncthreads();
 }
 
+    
 __device__
 void Runtime::free_warp_async(Future& future_tmp){
     if (threadIdx.x%32 == 0){
@@ -609,6 +705,7 @@ void Runtime::free_warp_async(Future& future_tmp){
     __syncthreads();
 }
 
+    
 __device__
 void Runtime::free_block_async(Future& future_tmp){
     if (threadIdx.x == 0){
@@ -618,11 +715,13 @@ void Runtime::free_block_async(Future& future_tmp){
     __syncthreads();
 }
 
+    
 __device__
 void Runtime::malloc_async(volatile int** ptr, size_t size){
     request_async((request_type)MALLOC, ptr, size);
 }
 
+    
 __device__
 void Runtime::malloc_async(Future& tab, size_t size){
     tab.ptr = NULL;
@@ -633,15 +732,18 @@ void Runtime::malloc_async(Future& tab, size_t size){
     __threadfence();
 }
 
+    
 __forceinline__ __device__
 void Runtime::free(volatile int* ptr){
     request((request_type)FREE, &ptr, 0);
 }
 
+    
 __device__
 void Runtime::free_async(volatile int** ptr){
     request_async((request_type)FREE, ptr, 0);
 }
+
 
 __device__
 void Runtime::free_async(Future& future){
@@ -649,6 +751,4 @@ void Runtime::free_async(Future& future){
 }
 
 
-
-}
 #endif
