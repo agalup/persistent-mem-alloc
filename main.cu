@@ -5,8 +5,7 @@
 using namespace std;
 
 int main(int argc, char *argv[]){
-
-
+    
     size_t instant_size = 16 * 1024ULL * 1024ULL * 1024ULL;
     //size_t instant_size = 8 * 1024ULL * 1024ULL * 1024ULL;
     //size_t instant_size = 7 * 1024ULL * 1024ULL * 1024ULL;
@@ -16,6 +15,7 @@ int main(int argc, char *argv[]){
     int mono = 0;
     int device_id = 0;
     int block_size = 1024;
+    int cb_number = 100;
     
     if (argc > 1){
         size_to_alloc = atoi(argv[1]);
@@ -35,10 +35,13 @@ int main(int argc, char *argv[]){
     if (argc > 6){
         kernel_iter_num = atoi(argv[6]);
     }
+    if (argc > 7){
+        cb_number = atoi(argv[7]);
+    }
     
-    printf("./a.out <B to alloc> <mono?> <#iters> <block_size> <device id> <kernel iters>\n");
-    printf("./a.out       %d        %d      %d          %d          %d          %d\n", 
-            size_to_alloc, mono, iteration_num, block_size, device_id, kernel_iter_num);
+    printf("./a.out <B to alloc> <mono?> <#iters> <block_size> <device id> <kernel iters> <callback num>\n");
+    printf("./a.out       %d        %d      %d          %d          %d          %d              %d\n", 
+            size_to_alloc, mono, iteration_num, block_size, device_id, kernel_iter_num, cb_number);
 
     cudaDeviceProp deviceProp;
     GUARD_CU(cudaGetDeviceProperties(&deviceProp, 0));
@@ -56,7 +59,7 @@ int main(int argc, char *argv[]){
     
     pmm_init(mono, kernel_iter_num, size_to_alloc, &instant_size, 
             iteration_num, SMs, sm_app, sm_mm, sm_gc, allocs_size, 
-            uni_req_per_sec, array_size, block_size, device_id);
+            uni_req_per_sec, array_size, block_size, device_id, cb_number);
 
     GUARD_CU(cudaDeviceReset());
     GUARD_CU(cudaPeekAtLastError());

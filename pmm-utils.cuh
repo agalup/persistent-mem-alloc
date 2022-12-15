@@ -1,6 +1,6 @@
 
-#ifndef _pmm_utils_h
-#define _pmm_utils_h
+#ifndef _pmm_utils_cuh
+#define _pmm_utils_cuh
 
 #include "device/Ouroboros_impl.cuh"
 #include "device/MemoryInitialization.cuh"
@@ -13,6 +13,7 @@
 #include <iostream>
 #include <string>
 #include <cassert>
+#include "pmm-utils.h"
 
 using namespace std;
 
@@ -27,7 +28,6 @@ using namespace std;
 #ifdef HALLOC__
 #include "Instance.cuh"
 #endif
-
 
 #ifdef OUROBOROS__
     //Ouroboros initialization
@@ -52,6 +52,16 @@ using namespace std;
 #define callback_type       8
 
 
+#define GUARD_CU(cuda_call)                                                   \
+  {                                                                           \
+    if (cuda_call != (enum cudaError) CUDA_SUCCESS){  \
+        printf("--- ERROR(%d:%s) --- %s:%d\n", cuda_call, cudaGetErrorString(cuda_call), __FILE__, __LINE__);\
+    } \
+  }\
+
+#define CB_MAX 100
+
+
 //TODO:
 //New data structure for queue to link all allocated memory pointers to one within a warp.
 
@@ -73,13 +83,6 @@ cudaError_t GRError(cudaError_t error, const char *message,
   }
   return error;
 }
-
-#define GUARD_CU(cuda_call)                                                   \
-  {                                                                           \
-    if (cuda_call != (enum cudaError) CUDA_SUCCESS){  \
-        printf("--- ERROR(%d:%s) --- %s:%d\n", cuda_call, cudaGetErrorString(cuda_call), __FILE__, __LINE__);\
-    } \
-  }\
 
 __device__ void acquire_semaphore(volatile int* lock, int i){
     while (atomicCAS((int*)&lock[i], 0, 1) != 0){
@@ -119,7 +122,6 @@ struct Future;
 struct Service;
 
 struct RequestType{
-
     volatile size_t* requests_number; 
     volatile int* request_counter;
     volatile int* request_signal; 
@@ -216,23 +218,30 @@ void Service::init(CUdevice device){
     GUARD_CU(cudaPeekAtLastError());
 }
 
-typedef void(*volatile Callback_fn)(void);
+typedef void(*Callback_fn)(int*);
 
 struct Callback{
-    Callback_fn ptr;
+    volatile Callback_fn* ptr;
+    //static size_t num;
 
-    __device__ 
-    Callback(Callback_fn Ptr) : ptr{Ptr} {}
-
-    __device__
-    Callback& operator=(const Callback& cb){
-        ptr = cb.ptr;
-        return *this;
+    __host__
+    void init(int cb_size){
+        GUARD_CU(cudaMallocManaged(&ptr, cb_size*sizeof(Callback_fn))); 
     }
+
+    __host__
+    void free(){
+        GUARD_CU(cudaFree((void*)ptr));
+        GUARD_CU(cudaDeviceSynchronize());
+        GUARD_CU(cudaPeekAtLastError());
+    }
+
+
 };
 
 struct Runtime{
     int app_threads_num;
+    int callbacks_index;
     volatile int* exit_signal;
     volatile int* exit_counter; 
 
@@ -241,28 +250,60 @@ struct Runtime{
     Service* gc;
     Service* cb;
 
-    Callback* request_callbacks;
+    //Callbacks
+    Callback callbacks;
+    volatile int* request_callbacks;
 
     RequestType* requests;
     MemoryManagerType* mem_manager;
 
     //HOST
-    void init(size_t Size, CUdevice device, MemoryManagerType&);
+    void init(size_t Size, CUdevice device, MemoryManagerType&, int);
     void free();
+    
+    __host__
+    void register_cb(Callback_fn cb_fn){
+        callbacks.ptr[callbacks_index] = cb_fn;
+        ++callbacks_index;
+        debug("cb %d registered\n", callbacks_index);
+    }
+    
     __forceinline__ void stop(){ 
         *exit_signal = 1; 
-        }
+    }
+
+    __forceinline__ __host__ __device__ 
+    bool there_is_a_callback(int i){
+        return (request_callbacks[i] >= 0);
+    }
+
+    __forceinline__ int callback_id(int i){
+        return request_callbacks[i];
+    }
+
+    __forceinline__ Callback_fn callback_run(int i){
+        assert(i < callbacks_index);
+        assert(callbacks.ptr);
+        return callbacks.ptr[i];
+    }
+
+    __forceinline__ void callback_close(int i){
+        request_callbacks[i] = -1;
+    }
 
     //DEVICE
     __forceinline__ __device__ size_t size(){ 
         return requests->requests_number[0]; 
-        }
-    __forceinline__ __device__ int is_working(){ 
+    }
+    __forceinline__ __device__ __host__ int is_working(){ 
         return (! exit_signal[0]); 
-        }
+    }
     __forceinline__ __device__ int is_available(int thid){ 
         return (requests->request_signal[thid] == request_empty); 
-        }
+    }
+    __forceinline__ __device__ int cb_is_finished(int thid){ 
+        return (request_callbacks[thid] == -1); 
+    }
     __forceinline__ __device__ int is_finished(int thid){ 
         return (requests->request_signal[thid] == request_done); 
     }
@@ -288,10 +329,10 @@ struct Runtime{
     __device__ void free_block_async(Future&);
     // DONE
 
-    //__device__ void callback(volatile int**, Callback lambda);
-    __device__ void callback(volatile int**, Callback* lambda);
-    __device__ void request_cb(request_type, volatile int**, Callback* lambda);
-    __device__ void post_request_cb(request_type, Callback* lambda);
+    __device__ void callback(volatile int**, int lambda);
+    __device__ void callback_async(Future& ptr, int lambda);
+    __device__ void request_cb(request_type, volatile int**, int lambda);
+    __device__ void post_request_cb(request_type, int lambda);
 
     //TODO: put it to the intra-communicator
     __device__ void request(request_type, volatile int**, int);
@@ -300,8 +341,8 @@ struct Runtime{
     __device__ void request_processed(request_type, volatile int**);
     __device__ void _request_processing(int); 
     __device__ void wait(request_type, int, volatile int** new_ptr);
+    __device__ void cb_wait(request_type, int, volatile int** new_ptr);
 };
-
 
 struct Future{
     volatile int* ptr;
@@ -310,18 +351,25 @@ struct Future{
     request_type type;
 
     __device__ volatile int* get();
+    __device__ volatile int* cb_get();
     __device__ volatile int* get_warp_async(size_t);
     __device__ volatile int* get_block_async(size_t);
 };
-
     
+__device__
+volatile int* Future::cb_get(){
+    //printf("cb_wait for %d thread %d\n", type, thid); 
+    runtime->cb_wait(type, thid, &ptr);
+    __threadfence();
+    return ptr;
+}
+
 __device__
 volatile int* Future::get(){
     runtime->wait(type, thid, &ptr);
     __threadfence();
     return ptr;
 }
-
 
 __device__
 volatile int* Future::get_warp_async(size_t size){
@@ -335,7 +383,6 @@ volatile int* Future::get_warp_async(size_t size){
     return (volatile int*)(((volatile char*)ptr) + offset);
 }
 
-
 __device__
 volatile int* Future::get_block_async(size_t size){
     int offset = threadIdx.x * size;
@@ -345,6 +392,16 @@ volatile int* Future::get_block_async(size_t size){
     __threadfence();
     __syncthreads();
     return (volatile int*)(((volatile char*)ptr) + offset);
+}
+
+__device__
+void Runtime::cb_wait(request_type type, int thid, volatile int** new_ptr){
+    while (is_working()){
+        if (cb_is_finished(thid)){
+            break;
+        }
+    }
+
 }
 
 __device__
@@ -360,7 +417,7 @@ void Runtime::wait(request_type type, int thid, volatile int** new_ptr){
     assert(*new_ptr);
 }
 
-void Runtime::init(size_t APP_threads_number, CUdevice device, MemoryManagerType& memory_manager){
+void Runtime::init(size_t APP_threads_number, CUdevice device, MemoryManagerType& memory_manager, int cb_num){
     app_threads_num = APP_threads_number;
     
     GUARD_CU(cudaMallocManaged(&exit_signal, sizeof(int32_t)));
@@ -369,9 +426,8 @@ void Runtime::init(size_t APP_threads_number, CUdevice device, MemoryManagerType
     GUARD_CU(cudaMallocManaged(&gc, sizeof(Service)));
     GUARD_CU(cudaMallocManaged(&cb, sizeof(Service)));
     GUARD_CU(cudaMallocManaged(&requests, sizeof(RequestType)));
-
-    GUARD_CU(cudaMallocManaged((void**)&request_callbacks, app_threads_num * sizeof(Callback)));
-    for (int i=0; i<app_threads_num; ++i) request_callbacks[i].ptr = NULL;
+    GUARD_CU(cudaMallocManaged((void**)&request_callbacks, app_threads_num * sizeof(int)));
+    for (int i=0; i<app_threads_num; ++i) request_callbacks[i] = -1;
 
     *exit_signal = 0;
     *exit_counter = 0;
@@ -381,6 +437,8 @@ void Runtime::init(size_t APP_threads_number, CUdevice device, MemoryManagerType
     assert(cb);
     assert(requests);
 
+    callbacks_index = 0;
+    callbacks.init(cb_num);
     mm->init(device);
     gc->init(device);
     cb->init(device);
@@ -405,6 +463,7 @@ void Runtime::free(){
     gc->free();
     cb->free();
     requests->free();
+    callbacks.free();
     GUARD_CU(cudaFree((void*)exit_signal));
     GUARD_CU(cudaFree((void*)exit_counter));
     GUARD_CU(cudaFree((void*)mm));
@@ -418,14 +477,14 @@ void Runtime::free(){
 }
 
 __device__
-void Runtime::post_request_cb(request_type type, Callback* callback){
+void Runtime::post_request_cb(request_type type, int callback){
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
     // SEMAPHORE
     __threadfence();
     acquire_semaphore((int*)(requests->lock), thid);
     if (type == CB){
         //assert(callback.ptr);
-        request_callbacks[thid].ptr = callback->ptr;
+        request_callbacks[thid] = callback;
         __threadfence();
         //assert(request_callbacks[thid].ptr);
     }
@@ -433,6 +492,7 @@ void Runtime::post_request_cb(request_type type, Callback* callback){
     atomicExch((int*)&(requests->request_signal[thid]), type);
     debug("APP %s: thid %d, block ID %d, warp ID %d, lane ID %d, sm ID %d\n", __FUNCTION__, thid, blockIdx.x, warp_id(), lane_id(), sm_id());
     release_semaphore((int*)(requests->lock), thid);
+    debug("semapohre released\n");
     __threadfence();
     // SEMAPHORE
 }
@@ -482,6 +542,8 @@ void Runtime::request_processed(request_type type, volatile int** dest){
         case GC:
             //assert(d_memory[req_id] == NULL);
             break;
+        case CB:
+            break;
         default:
             printf("error\n");
             break;
@@ -510,25 +572,35 @@ void Runtime::request_async(request_type type,
 }
 
 __device__
-void Runtime::callback(volatile int** ptr, Callback* function){
-    //assert(function.ptr);
+void Runtime::callback_async(Future& ptr, int function){
+    ptr.ptr = NULL;
+    ptr.thid = blockIdx.x * blockIdx.x + threadIdx.x;
+    ptr.runtime = this;
+    ptr.type = (request_type)CB;
+    request_cb((request_type)CB, &ptr.ptr, function);
+    debug("callback done\n");
+}
+
+__device__
+void Runtime::callback(volatile int** ptr, int function){
     request_cb((request_type)CB, ptr, function);
+    debug("callback done\n");
 }
 
 __device__
 void Runtime::request_cb(request_type type,
                       volatile int** dest,
-                      Callback* callback){
+                      int callback){
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
     // wait for request to be posted
     while (is_working()){
-        if (is_available(thid)){
-            //assert(callback.ptr);
-            post_request_cb(type, callback);
+        if (cb_is_finished(thid)){
+            request_callbacks[thid] = callback;
+            __threadfence();
             break;
         }
-        __threadfence();
     }
+    debug("request_cb done [%s:%d]\n", __FILE__, __LINE__);
     __threadfence();
 }
     

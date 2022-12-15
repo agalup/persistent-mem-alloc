@@ -13,48 +13,42 @@
 #include "Utility.h"
 #include "cuda.h"
 #include "pmm-utils.cuh"
+#include "pmm-utils.h"
 
 using namespace std;
 
-//extern "C" {
-
 // Launch tests
 void mps_monolithic_app(int, int, int, size_t*, size_t, int, int*, int*, 
-                        int*, int*, float*, int*, int, int);
+                        int*, int*, float*, int*, int, int, int);
 
 void simple_monolithic_app(int, int, int, size_t*, size_t, int, int*, 
                            int*, int*, int*, float*, int*, int, int);
 
 void mps_app(int, int, int, size_t*, size_t, int, int*, int*, int*, 
-             int*, float*, int*, int, int);
+             int*, float*, int*, int, int, int);
 
 // Servies
 // Memory Manager Service
-
 void start_memory_manager(PerfMeasure&, uint32_t, uint32_t, CUcontext&, Runtime&);
-
 __global__ void mem_manager(Runtime);
+
 // Garbage Collector Service
-
 void start_garbage_collector(PerfMeasure&, uint32_t, uint32_t, CUcontext&, Runtime&);
-
 __global__ void garbage_collector(Runtime);
-// TODO: Callback Service TODO:
 
+// Callback Service 
 void start_callback_server(PerfMeasure&, uint32_t, uint32_t, CUcontext&, Runtime&);
-// TODO: Queue Service TODO
 
+// TODO: Queue Service TODO
 // TODO: Fency mechanism of turning on/off services from Runtime.
 // TODO: Testing without garbage collector.
 
 // Clean up
-
 void clean_memory(uint32_t, uint32_t, Runtime&);
 
 __global__ void mem_free(Runtime);
 
 // TESTS
-
 void start_application(PerfMeasure&, uint32_t, uint32_t, volatile int*, volatile int*, 
                         int*, int*, int, bool&, Runtime&);
 
@@ -93,7 +87,7 @@ __global__ void callback_test(int*, Runtime);
 extern "C" void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc, 
         size_t* ins_size, size_t num_iterations, int SMs, int* sm_app, 
         int* sm_mm, int* sm_gc, int* allocs, float* uni_req_per_sec, 
-        int* array_size, int block_size, int device){
+        int* array_size, int block_size, int device, int cb_number){
 
     GUARD_CU(cudaSetDevice(device));
 
@@ -106,7 +100,7 @@ extern "C" void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
         mps_monolithic_app(mono, kernel_iteration_num, 
                 size_to_alloc, ins_size, num_iterations, 
                 SMs, sm_app, sm_mm, sm_gc, allocs, 
-                uni_req_per_sec, array_size, block_size, device);
+                uni_req_per_sec, array_size, block_size, device, cb_number);
 
         printf("MPS_mono\n");
     }else if (mono == simple_mono){
@@ -119,9 +113,10 @@ extern "C" void pmm_init(int mono, int kernel_iteration_num, int size_to_alloc,
 
         printf("simple mono\n");
     }else{
+        printf("other mono\n");
         mps_app(mono, kernel_iteration_num, size_to_alloc, ins_size, 
                 num_iterations, SMs, sm_app, sm_mm, sm_gc, allocs, 
-                uni_req_per_sec, array_size, block_size, device);
+                uni_req_per_sec, array_size, block_size, device, cb_number);
     }
 }
 
@@ -359,7 +354,6 @@ void app_async_request_test(int* size_to_alloc,
                             int* iter_num,
                             int MONO,
                             Runtime runtime){
-
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
     for (int i=0; i<iter_num[0]; ++i){
         // MEMORY ALLOCATION
@@ -384,34 +378,39 @@ void app_async_request_test(int* size_to_alloc,
     __threadfence();
 }
 
-
 __global__
-void callback_test(int* iter_num, 
-                   Runtime runtime){
-    int thid = threadIdx.x+blockIdx.x*blockDim.x;
+void callback_async_test(int* iter_num, Runtime runtime){
+    int thid = blockDim.x * blockIdx.x + threadIdx.x;
     for (int i=0; i<iter_num[0]; ++i){
-        if (thid == 10){
-            // CALLBACK
-            volatile int* new_ptr;
+        // CALLBACK
+        //volatile int* new_ptr;
+        Future complete;
+        runtime.callback_async(complete, 1);
+        runtime.callback_async(complete, 2);
+        debug("callback done [%s:%d]\n", __FILE__, __LINE__);
 
-            runtime.request_callbacks[thid].ptr = [] __host__ (){printf("bla bla bla\n");};
-
-            //Callback cb{cb_lambda2};
-            //cb.ptr = &cb_lambda2;
-            //assert(cb.ptr);
-            //printf("callback ptr %x\n", cb.ptr);
-            //runtime.callback(&new_ptr, Callback(cb));
-        }
+        //complete.cb_get(); hangs because one thread on CPU is a bottleneck
+        __threadfence();
     }
     atomicAdd((int*)(runtime.exit_counter), 1);
     __threadfence();
 }
 
 __global__
-void app_test(int* size_to_alloc,
-              int* iter_num,
-              int MONO, 
-              Runtime runtime){
+void callback_test(int* iter_num, Runtime runtime){
+    for (int i=0; i<iter_num[0]; ++i){
+        // CALLBACK
+        volatile int* new_ptr;
+        runtime.callback(&new_ptr, 0);
+        debug("callback done [%s:%d]\n", __FILE__, __LINE__);
+    }
+    atomicAdd((int*)(runtime.exit_counter), 1);
+    __threadfence();
+}
+
+__global__
+void app_test(int* size_to_alloc, int* iter_num,
+              int MONO, Runtime runtime){
     int thid = blockDim.x * blockIdx.x + threadIdx.x;
     for (int i=0; i<iter_num[0]; ++i){
         // ALLOC
@@ -450,7 +449,6 @@ void start_memory_manager(PerfMeasure& timing_mm,
     timing_mm.stopMeasurement();
 }
 
-
 void start_garbage_collector(PerfMeasure& timing_gc, 
                              uint32_t gc_grid_size,
                              uint32_t block_size, 
@@ -467,37 +465,43 @@ void start_garbage_collector(PerfMeasure& timing_gc,
     timing_gc.stopMeasurement();
 }
 
-// TODO
 void start_callback_server(PerfMeasure& timing_cb, 
                           uint32_t cb_grid_size,
                           uint32_t block_size, 
                           CUcontext& cb_ctx,
                           Runtime& runtime){
+    Callback_fn fn1 = [](int* ptr){
+        printf("Registered callback\n");
+        };
+    Callback_fn fn2 = [](int* ptr){
+        //printf("cudaMalloc within HOST\n");
+        GUARD_CU(cudaMalloc((void**)&ptr, sizeof(int)));
+        };
+    Callback_fn fn3 = [](int* ptr){
+        //printf("cudaFree within HOST\n");
+        GUARD_CU(cudaFree(ptr));
+        };
+    runtime.register_cb(fn1);
+    runtime.register_cb(fn2);
+    runtime.register_cb(fn3);
     timing_cb.startMeasurement();
     runtime.cb->start();
-    while (! runtime.exit_signal[0]){
+    while (runtime.is_working()){
         for (int i = 0; i < runtime.app_threads_num; ++i){
-            if (runtime.request_callbacks[i].ptr){
-                printf("callback from %d, addr %x addr %x\n", i, runtime.request_callbacks,
-                runtime.request_callbacks[i].ptr);
+            //printf("for thread %d\n", i);
+            if (runtime.there_is_a_callback(i)){
+                int cb_id = runtime.callback_id(i);
+                debug("callback by %d of id %d\n", i, cb_id);
+                runtime.callback_run(cb_id)(NULL);
+                runtime.callback_close(i);
                 fflush(stdout);
-                //char a = runtime.request_callbacks[i].ptr;
-                runtime.request_callbacks[i].ptr();
-                fflush(stdout);
-                //volatile int* ptr;
-                //reinterpret_cast<void(void)>(runtime.request_callbacks[i])();
-                //static_cast<void(void)>(runtime.request_callbacks[i])();
-                break;
             }
         }
-        std::this_thread::sleep_for(std::chrono::microseconds(1));
     }
-
     GUARD_CU((cudaError_t)cudaGetLastError());
     GUARD_CU(cudaPeekAtLastError());
     timing_cb.stopMeasurement();
 }
-
 
 void clean_memory(uint32_t grid_size,
                   uint32_t block_size, 
@@ -595,7 +599,7 @@ void start_application(PerfMeasure& timing_sync,
         void* args[] = {&dev_iter_num, &runtime};
         //GUARD_CU(cudaProfilerStart());
         timing_sync.startMeasurement();
-        GUARD_CU(cudaLaunchCooperativeKernel((void*)callback_test, grid_size, block_size, args));
+        GUARD_CU(cudaLaunchCooperativeKernel((void*)callback_async_test, grid_size, block_size, args));
         GUARD_CU((cudaError_t)cuCtxSynchronize());
         GUARD_CU(cudaPeekAtLastError());
         timing_sync.stopMeasurement();
@@ -709,7 +713,7 @@ __host__
 void mps_monolithic_app(int mono, int kernel_iteration_num, int size_to_alloc, 
             size_t* ins_size, size_t num_iterations, int SMs, int* sm_app, 
             int* sm_mm, int* sm_gc, int* allocs, float* uni_req_per_sec, 
-            int* array_size, int block_size, int device_id){
+            int* array_size, int block_size, int device_id, int cb_number = 0){
 
     auto instant_size = *ins_size;
 
@@ -768,7 +772,7 @@ void mps_monolithic_app(int mono, int kernel_iteration_num, int size_to_alloc,
         GUARD_CU(cudaPeekAtLastError());
 
         Runtime runtime;
-        runtime.init(requests_num, device, memory_manager);
+        runtime.init(requests_num, device, memory_manager, cb_number);
 
         // Run APP (all threads do malloc)
         bool kernel_complete = false;
@@ -831,7 +835,7 @@ __host__
 void mps_app(int mono, int kernel_iteration_num, int size_to_alloc, 
              size_t* ins_size, size_t num_iterations, int SMs, int* sm_app, 
              int* sm_mm, int* sm_gc, int* allocs, float* uni_req_per_sec, 
-             int* array_size, int block_size, int device_id){
+             int* array_size, int block_size, int device_id, int cb_number){
 
     auto instant_size = *ins_size;
     CUcontext default_ctx;
@@ -874,9 +878,9 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
             if (gc_grid_size < 1) continue;
 
             int requests_num{app_grid_size * block_size};
-            debug("SMs: app %d, mm %d, gc %d, total %d\n", 
-                    app_grid_size, mm_grid_size, gc_grid_size, SMs);
-            debug("requests_num %d\n", requests_num);
+            //printf("SMs: app %d, mm %d, gc %d, cb %d, total %d\n", 
+            //        app_grid_size, mm_grid_size, gc_grid_size, cb_grid_size, SMs);
+            //printf("requests_num %d\n", requests_num);
             //fflush(stdout);
 
             //output
@@ -931,12 +935,10 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
             //Timing variables
             PerfMeasure malloc_total_sync, timing_mm, timing_gc, timing_cb;
             for (int iteration = 0; iteration < num_iterations; ++iteration){
-                debug("iteration %d\n", iteration);
+                printf("iteration %d/%d\n", iteration, num_iterations);
                 
-                //Runtime runtime;
-                //__device__ auto l = [dev_size_to_alloc](){return (void*)dev_size_to_alloc;}; 
                 Runtime runtime;
-                runtime.init(requests_num, device, memory_manager);
+                runtime.init(requests_num, device, memory_manager, cb_number);
 
                 debug("start threads\n");
                 // Run Memory Manager (Presistent kernel)
@@ -986,9 +988,10 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
 
                 //printf("-");
                 fflush(stdout);
-                while (!(runtime.gc->is_running() && runtime.mm->is_running() && 
-                            runtime.cb->is_running()
-                        ));
+                while (!(runtime.gc->is_running() && 
+                         runtime.mm->is_running() && 
+                         runtime.cb->is_running()));
+
                 GUARD_CU((cudaError_t)cudaGetLastError());
 
                 debug("app_numBlocksPerSm %d, app_grid_size %d, block_size %d\n", 
@@ -1010,6 +1013,7 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
                             runtime.exit_counter, dev_size_to_alloc, 
                             dev_kernel_iteration_num, mono, 
                             kernel_complete, runtime);
+                    debug("done before ctx sync\n");
                     GUARD_CU((cudaError_t)cuCtxSynchronize());
                     GUARD_CU(cudaPeekAtLastError());
                     debug("done\n");
@@ -1108,6 +1112,4 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
     }
     *array_size = it;
 }
-
-//}
 
