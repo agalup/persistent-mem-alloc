@@ -129,7 +129,12 @@ void mem_free(Runtime runtime){
     __threadfence();
     if (runtime.requests->d_memory[thid]){
         printf("sync error: %d was not released before\n", thid);
+#ifdef OUROBOROS__
         runtime.mem_manager->free((void*)runtime.requests->d_memory[thid]);
+#else
+        //GUARD_CU_DEV(cudaFree((void*)runtime.requests->d_memory[thid]));
+        //cudaFree((void*)runtime.requests->d_memory[thid]);
+#endif
     }
 }
 
@@ -196,7 +201,11 @@ void mono_app_test(volatile int** d_memory,
 
         volatile int* new_ptr = NULL;
 
+#ifdef OUROBOROS__
         d_memory[thid] = reinterpret_cast<volatile int*>(mm->malloc(4+size_to_alloc[0])); 
+#else
+        GUARD_CU_DEV(cudaMalloc((void**)&d_memory[thid], 4+size_to_alloc[0]));
+#endif
         d_memory[thid][0] = 0;
         new_ptr = &d_memory[thid][1];
         new_ptr[0] = thid;
@@ -211,7 +220,11 @@ void mono_app_test(volatile int** d_memory,
 
         __threadfence();
 
+#ifdef OUROBOROS__
         mm->free((void*)d_memory[thid]);
+#else
+        //GUARD_CU_DEV(cudaFree((void*)d_memory[thid]));
+#endif
         __threadfence();
         d_memory[thid] = NULL;
 
@@ -380,7 +393,7 @@ void app_async_request_test(int* size_to_alloc,
 
 __global__
 void callback_async_test(int* iter_num, Runtime runtime){
-    int thid = blockDim.x * blockIdx.x + threadIdx.x;
+    //int thid = blockDim.x * blockIdx.x + threadIdx.x;
     for (int i=0; i<iter_num[0]; ++i){
         // CALLBACK
         //volatile int* new_ptr;
@@ -483,7 +496,7 @@ void start_callback_server(PerfMeasure& timing_cb,
         };
     runtime.register_cb(fn1);
     runtime.register_cb(fn2);
-    runtime.register_cb(fn3);
+   // runtime.register_cb(fn3);
     timing_cb.startMeasurement();
     runtime.cb->start();
     while (runtime.is_working()){
@@ -624,13 +637,15 @@ void simple_monolithic_app(int mono, int kernel_iteration_num,
             float* uni_req_per_sec, int* array_size, int block_size, 
             int device_id){
 
-    auto instant_size = *ins_size;
     CUcontext default_ctx;
     GUARD_CU((cudaError_t)cuCtxGetCurrent(&default_ctx));
 
+#ifdef OUROBOROS__
     //Ouroboros initialization
+    auto instant_size = *ins_size;
     MemoryManagerType memory_manager;
     memory_manager.initialize(instant_size);
+#endif
 
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
@@ -680,7 +695,11 @@ void simple_monolithic_app(int mono, int kernel_iteration_num,
         GUARD_CU(cudaPeekAtLastError());
         malloc_total_sync.startMeasurement();
 
+#ifdef OUROBOROS__
         auto dev_mm = memory_manager.getDeviceMemoryManager();
+#else
+        void** dev_mm = NULL;
+#endif
         mono_app_test<<<app_grid_size, block_size, 0, app_stream>>>(
                         d_memory, exit_counter, dev_size_to_alloc, 
                         dev_kernel_iteration_num, dev_mm); 
@@ -715,11 +734,13 @@ void mps_monolithic_app(int mono, int kernel_iteration_num, int size_to_alloc,
             int* sm_mm, int* sm_gc, int* allocs, float* uni_req_per_sec, 
             int* array_size, int block_size, int device_id, int cb_number = 0){
 
-    auto instant_size = *ins_size;
-
     //Ouroboros initialization
     MemoryManagerType memory_manager;
+#ifdef OUROBOROS__
+    auto instant_size = *ins_size;
     memory_manager.initialize(instant_size);
+#else
+#endif
 
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
@@ -837,18 +858,20 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
              int* sm_mm, int* sm_gc, int* allocs, float* uni_req_per_sec, 
              int* array_size, int block_size, int device_id, int cb_number){
 
-    auto instant_size = *ins_size;
     CUcontext default_ctx;
     GUARD_CU((cudaError_t)cuCtxGetCurrent(&default_ctx));
 
     //Ouroboros initialization
     MemoryManagerType memory_manager;
+#ifdef OUROBOROS__
+    auto instant_size = *ins_size;
     memory_manager.initialize(instant_size);
+#endif
 
     int total_gpus = 0;
     GUARD_CU((cudaError_t)cudaGetDeviceCount(&total_gpus));
-    printf("device %d/%d\n", device_id, total_gpus);
-    printf("Block size = %d\n", block_size);
+    debug("device %d/%d\n", device_id, total_gpus);
+    debug("Block size = %d\n", block_size);
     
     CUdevice device;
     GUARD_CU((cudaError_t)cuDeviceGet(&device, device_id));
@@ -935,7 +958,7 @@ void mps_app(int mono, int kernel_iteration_num, int size_to_alloc,
             //Timing variables
             PerfMeasure malloc_total_sync, timing_mm, timing_gc, timing_cb;
             for (int iteration = 0; iteration < num_iterations; ++iteration){
-                printf("iteration %d/%d\n", iteration, num_iterations);
+                debug("iteration %d/%d\n", iteration, num_iterations);
                 
                 Runtime runtime;
                 runtime.init(requests_num, device, memory_manager, cb_number);

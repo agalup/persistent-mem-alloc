@@ -25,13 +25,11 @@ using namespace std;
 #define debug(a...)
 #endif
 
-#ifdef HALLOC__
-#include "Instance.cuh"
-#endif
-
 #ifdef OUROBOROS__
     //Ouroboros initialization
     #define MemoryManagerType OuroPQ
+#else
+    #define MemoryManagerType void*
 #endif
 
 #define EMPTY       0
@@ -56,6 +54,14 @@ using namespace std;
   {                                                                           \
     if (cuda_call != (enum cudaError) CUDA_SUCCESS){  \
         printf("--- ERROR(%d:%s) --- %s:%d\n", cuda_call, cudaGetErrorString(cuda_call), __FILE__, __LINE__);\
+    } \
+  }\
+
+
+#define GUARD_CU_DEV(cuda_call)                                                   \
+  {                                                                           \
+    if (cuda_call != (enum cudaError) CUDA_SUCCESS){  \
+        printf("--- ERROR(%d) --- %s:%d\n", cuda_call, __FILE__, __LINE__);\
     } \
   }\
 
@@ -222,14 +228,11 @@ typedef void(*Callback_fn)(int*);
 
 struct Callback{
     volatile Callback_fn* ptr;
-    //static size_t num;
 
-    __host__
     void init(int cb_size){
         GUARD_CU(cudaMallocManaged(&ptr, cb_size*sizeof(Callback_fn))); 
     }
 
-    __host__
     void free(){
         GUARD_CU(cudaFree((void*)ptr));
         GUARD_CU(cudaDeviceSynchronize());
@@ -452,7 +455,11 @@ void Runtime::init(size_t APP_threads_number, CUdevice device, MemoryManagerType
     GUARD_CU((cudaError_t)cudaMemPrefetchAsync((Service*)cb, sizeof(Service), device, NULL));
     GUARD_CU((cudaError_t)cudaMemPrefetchAsync((RequestType*)requests, sizeof(RequestType), device, NULL));
 
+#ifdef OUROBOROS__
     mem_manager = memory_manager.getDeviceMemoryManager();
+#else
+    //mem_manager = NULL;
+#endif
 
     GUARD_CU(cudaDeviceSynchronize());
     GUARD_CU(cudaPeekAtLastError());
@@ -651,8 +658,13 @@ void Runtime::_request_processing(int request_id){
                 assert(requests->d_memory[addr_id] == NULL);
             }
             __threadfence();
-            requests->d_memory[addr_id] = reinterpret_cast<volatile int*>
+           
+            #ifdef OUROBOROS__
+                requests->d_memory[addr_id] = reinterpret_cast<volatile int*>
                 (mem_manager->malloc(4+requests->request_mem_size[request_id]));
+            #else
+                GUARD_CU_DEV(cudaMalloc((void**)&requests->d_memory[addr_id], 4+requests->request_mem_size[request_id]));
+            #endif
             __threadfence();
             assert(requests->d_memory[addr_id]);
             requests->d_memory[addr_id][0] = 0;
@@ -686,7 +698,11 @@ void Runtime::_request_processing(int request_id){
             assert(requests->d_memory[addr_id]);
             assert(requests->d_memory[addr_id][0] == -1);
             __threadfence();
-            mem_manager->free((void*)requests->d_memory[addr_id]);
+            #ifdef OUROBOROS__
+                mem_manager->free((void*)requests->d_memory[addr_id]);
+            #else
+                //GUARD_CU_DEV(cudaFree((void*)requests->d_memory[addr_id]));
+            #endif
             __threadfence();
             requests->d_memory[addr_id] = NULL;
             atomicExch((int*)&requests->request_signal[request_id], request_done);
