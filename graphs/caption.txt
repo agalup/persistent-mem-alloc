@@ -1,0 +1,18 @@
+Why does Ouroborous’s allocation rate go down with larger allocations while runtime’s remains constant and that answer
+needs to depend on the fact that it’s a runtime.
+[4:56 PM] I’m fine with the graph if it comes with that explanation. It needs to be inherently “it’s a runtime” as the
+explanation though.
+
+
+We measure the number of malloc and free requests per a second performed in six variants of an operation access accross
+of diffrent allocation sizes. For a
+monolithic application (MA), the Ouroboros blocking malloc and free operations are called directly by:
+1. A thread.
+2. A 0-thread within a warp and followed by pointers distribution to the warp. 
+For an application supported by our Runtime System (RS), the Ouroboros blocking malloc and free operations are called on
+behalf of threads by our Runtime System in 4 manners:
+3. An immediate result is delivered to a calling thread.
+4. A Future object is delivered to a calling thread with a promise for a result.
+5. A 0-thread on behalf of a warp obtains an immediate result and distributes pointers to its warp.
+6. A 0-thread on behalf of a warp obtains a future object with a promise for a result and distributes pointers to its
+warp.
